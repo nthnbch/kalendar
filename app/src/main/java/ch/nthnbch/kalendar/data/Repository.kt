@@ -206,6 +206,14 @@ class Repository private constructor(private val context: Context) {
             val etags = db.etags(calendar.url)
             val changed = listed.filter { it.etag == null || etags[it.url] != it.etag }.map { it.url }
             val downloaded = client.fetch(calendar.url, changed)
+            val replies = account.email?.let { me ->
+                val zone = ZoneId.systemDefault()
+                downloaded.flatMap { item ->
+                    val data = item.data ?: return@flatMap emptyList()
+                    val before = db.ics(item.url) ?: return@flatMap emptyList()
+                    runCatching { Replies.detect(item.url, before, data, me, zone) }.getOrDefault(emptyList())
+                }
+            }.orEmpty()
             db.transaction {
                 for (item in downloaded) {
                     db.upsertEvent(StoredEvent(item.url, calendar.url, item.etag, item.data.orEmpty()))
@@ -214,6 +222,7 @@ class Repository private constructor(private val context: Context) {
                 etags.keys.filter { it !in listedUrls }.forEach(db::deleteEvent)
                 db.setCtag(calendar.url, calendar.ctag)
             }
+            Replies.notify(context, replies)
         }
     }
 

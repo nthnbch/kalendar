@@ -70,6 +70,12 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 private val REPEATS = listOf(null to R.string.repeat_never, "FREQ=DAILY" to R.string.repeat_daily, "FREQ=WEEKLY" to R.string.repeat_weekly, "FREQ=MONTHLY" to R.string.repeat_monthly, "FREQ=YEARLY" to R.string.repeat_yearly)
+
+/** Hour at which a day begins: where a new event starts unless it is created for the rest of today. */
+private const val DAY_START_HOUR = 6
+private val DEFAULT_DURATION: Duration = Duration.ofHours(1)
+/** Minutes before the start. */
+private const val DEFAULT_REMINDER = 60
 private val REMINDERS = listOf(0, 5, 10, 15, 30, 60, 120, 1440, 2880, 10080)
 
 /**
@@ -105,8 +111,8 @@ fun EventEditor(
     val zone = remember { source?.zone ?: ZoneId.systemDefault() }
 
     val defaultStart = remember {
-        // New events start at the next full hour, which is what one usually means by "now-ish".
-        val hour = if (request.date == LocalDate.now()) LocalTime.now().hour + 1 else 9
+        // A day starts at 06:00. Today, a new event starts at the next full hour (but not before that).
+        val hour = if (request.date == LocalDate.now()) (LocalTime.now().hour + 1).coerceIn(DAY_START_HOUR, 23) else DAY_START_HOUR
         request.date.atStartOfDay().plusHours(hour.toLong())
     }
     var title by remember { mutableStateOf(source?.summary.orEmpty()) }
@@ -115,10 +121,10 @@ fun EventEditor(
     var allDay by remember { mutableStateOf(source?.allDay ?: false) }
     var start by remember { mutableStateOf(source?.start ?: defaultStart) }
     // For all-day events the form shows the last day itself; the stored end is the day after.
-    var end by remember { mutableStateOf(source?.let { if (it.allDay) it.end.minusDays(1) else it.end } ?: defaultStart.plusHours(1)) }
+    var end by remember { mutableStateOf(source?.let { if (it.allDay) it.end.minusDays(1) else it.end } ?: defaultStart.plus(DEFAULT_DURATION)) }
     var rrule by remember { mutableStateOf(if (scopeNow == Scope.THIS) null else source?.rrule ?: master?.rrule?.takeIf { scopeNow != Scope.ALL }) }
     var guests by remember { mutableStateOf(source?.attendees?.joinToString(", ") { it.email }.orEmpty()) }
-    var alarms by remember { mutableStateOf(source?.alarms ?: listOf(15)) }
+    var alarms by remember { mutableStateOf(source?.alarms ?: listOf(DEFAULT_REMINDER)) }
     var calendarUrl by remember {
         mutableStateOf(
             resource?.calendarUrl

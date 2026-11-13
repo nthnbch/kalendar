@@ -48,6 +48,10 @@ class Db(context: Context) : SQLiteOpenHelper(context, "kalendar.db", null, 1) {
             out
         }
 
+    fun ics(href: String): String? = readableDatabase
+        .rawQuery("SELECT ics FROM events WHERE href = ?", arrayOf(href))
+        .use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
     fun etags(calendarUrl: String): Map<String, String?> = readableDatabase
         .rawQuery("SELECT href, etag FROM events WHERE calendar_url = ?", arrayOf(calendarUrl))
         .use { c ->

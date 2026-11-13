@@ -21,11 +21,14 @@ object Links {
 
     fun day(context: Context, date: LocalDate): Intent = intent(context, "kalendar://day/${date.toEpochDay()}")
 
-    fun event(context: Context, occurrence: Occurrence): Intent = intent(
+    fun event(context: Context, occurrence: Occurrence): Intent =
+        event(context, occurrence.href, occurrence.startInstant.epochSecond)
+
+    fun event(context: Context, href: String, startEpochSecond: Long): Intent = intent(
         context,
         Uri.Builder().scheme("kalendar").authority("event")
-            .appendQueryParameter("href", occurrence.href)
-            .appendQueryParameter("start", occurrence.startInstant.epochSecond.toString())
+            .appendQueryParameter("href", href)
+            .appendQueryParameter("start", startEpochSecond.toString())
             .build().toString(),
     )
 

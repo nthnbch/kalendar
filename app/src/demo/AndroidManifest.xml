@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true">
+        <!-- adb shell am broadcast -n ch.nthnbch.kalendar.demo/ch.nthnbch.kalendar.demo.SeedReceiver -->
+        <receiver android:name="ch.nthnbch.kalendar.demo.SeedReceiver" android:exported="true" />
+    </application>
+</manifest>

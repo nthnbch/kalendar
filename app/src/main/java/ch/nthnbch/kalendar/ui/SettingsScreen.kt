@@ -1,0 +1,191 @@
+package ch.nthnbch.kalendar.ui
+
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import ch.nthnbch.kalendar.BuildConfig
+import ch.nthnbch.kalendar.R
+import ch.nthnbch.kalendar.data.Settings
+import ch.nthnbch.kalendar.data.Settings.Theme
+
+/** Native names: a language must stay recognisable whatever the app is currently set to. */
+private val LANGUAGE_NAMES = mapOf("en" to "English", "fr" to "Français", "de" to "Deutsch", "es" to "Español")
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(onClose: () -> Unit) {
+    val context = LocalContext.current
+    BackHandler(onBack = onClose)
+
+    var theme by remember { mutableStateOf(Settings.theme(context)) }
+    var language by remember { mutableStateOf(Settings.language()) }
+    var lock by remember { mutableStateOf(Settings.appLock(context)) }
+    var lockUnavailable by remember { mutableStateOf(false) }
+    var replies by remember { mutableStateOf(Settings.notifyReplies(context)) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.cancel)) } },
+                title = { Text(stringResource(R.string.settings), fontWeight = FontWeight.SemiBold) },
+            )
+        },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+            Section(R.string.settings_appearance)
+            Choice(
+                stringResource(R.string.settings_language),
+                language?.let { LANGUAGE_NAMES.getValue(it) } ?: stringResource(R.string.settings_system),
+                listOf<Pair<String?, String>>(null to stringResource(R.string.settings_system)) + Settings.LANGUAGES.map { it to LANGUAGE_NAMES.getValue(it) },
+            ) {
+                language = it
+                Settings.setLanguage(it)
+            }
+            Choice(
+                stringResource(R.string.settings_theme),
+                stringResource(themeName(theme)),
+                Theme.entries.map { it to stringResource(themeName(it)) },
+            ) {
+                theme = it
+                Settings.setTheme(context, it)
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Section(R.string.settings_notifications)
+            Toggle(stringResource(R.string.settings_replies), stringResource(R.string.settings_replies_hint), replies) {
+                replies = it
+                Settings.setNotifyReplies(context, it)
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Section(R.string.settings_security)
+            Toggle(
+                stringResource(R.string.settings_lock),
+                if (lockUnavailable) stringResource(R.string.settings_lock_unavailable) else stringResource(R.string.settings_lock_hint),
+                lock,
+                error = lockUnavailable,
+            ) { wanted ->
+                val activity = context.findActivity()
+                when {
+                    !wanted -> {
+                        lock = false
+                        Settings.setAppLock(context, false)
+                    }
+                    activity == null || !AppLock.available(context) -> lockUnavailable = true
+                    else -> {
+                        lockUnavailable = false
+                        // Prove it works before turning it on, so nobody locks themselves out.
+                        AppLock.authenticate(activity, context.getString(R.string.lock_title)) {
+                            lock = true
+                            AppLock.unlocked = true
+                            Settings.setAppLock(context, true)
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Section(R.string.settings_about)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)) {
+                Text(stringResource(R.string.settings_version), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                Text(BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(
+                Modifier.fillMaxWidth()
+                    .clickable { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Settings.REPO_URL))) } }
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+            ) {
+                Text(stringResource(R.string.settings_source), style = MaterialTheme.typography.bodyLarge)
+                Text(Settings.REPO_URL, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+private fun themeName(theme: Theme): Int = when (theme) {
+    Theme.SYSTEM -> R.string.settings_system
+    Theme.LIGHT -> R.string.settings_theme_light
+    Theme.DARK -> R.string.settings_theme_dark
+}
+
+@Composable
+private fun Section(title: Int) {
+    Text(
+        stringResource(title), Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+private fun Toggle(title: String, hint: String, checked: Boolean, error: Boolean = false, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                hint, style = MaterialTheme.typography.bodySmall,
+                color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun <T> Choice(title: String, value: String, options: List<Pair<T, String>>, onPick: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 24.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Text(value, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+        }
+        // Anchored to the right edge, under the row, where the value is.
+        Box(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp)) {
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for ((key, label) in options) {
+                    DropdownMenuItem(text = { Text(label) }, onClick = {
+                        open = false
+                        onPick(key)
+                    })
+                }
+            }
+        }
+    }
+}

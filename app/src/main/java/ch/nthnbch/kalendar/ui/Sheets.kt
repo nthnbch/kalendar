@@ -220,7 +220,7 @@ fun reminderLabel(context: Context, minutes: Int): String = when {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CalendarsSheet(repository: Repository, snapshot: Snapshot, onDismiss: () -> Unit, onSync: () -> Unit) {
+fun CalendarsSheet(repository: Repository, snapshot: Snapshot, onDismiss: () -> Unit, onSync: () -> Unit, onSettings: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val account by repository.account.collectAsStateWithLifecycle()
@@ -267,6 +267,12 @@ fun CalendarsSheet(repository: Repository, snapshot: Snapshot, onDismiss: () -> 
                 Text(stringResource(R.string.no_calendars), Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
+            HorizontalDivider()
+            Text(
+                stringResource(R.string.settings),
+                Modifier.fillMaxWidth().clickable(onClick = onSettings).padding(horizontal = 24.dp, vertical = 14.dp),
+                style = MaterialTheme.typography.bodyLarge,
+            )
             HorizontalDivider()
             Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = { confirmSignOut = true }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.sign_out)) }

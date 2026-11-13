@@ -12,7 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
-/** Background synchronisation: every half hour, and on demand from the widgets. */
+/** Background synchronisation: every quarter of an hour, and on demand from the widgets. */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = when (Repository.get(applicationContext).sync()) {
@@ -26,7 +26,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<SyncWorker>(30, TimeUnit.MINUTES).setConstraints(online).build()
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(online).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, request)
         }
 

@@ -3,7 +3,8 @@ package ch.nthnbch.kalendar.ui
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -21,8 +22,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.nthnbch.kalendar.data.InfomaniakAuth
 import ch.nthnbch.kalendar.data.Repository
+import ch.nthnbch.kalendar.data.Settings
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     /** Destination asked by a widget or a notification, until the screen has acted on it. */
     private var link by mutableStateOf<Link?>(null)
@@ -41,10 +43,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             KalendarTheme {
                 val account by repository.account.collectAsStateWithLifecycle()
-                if (account == null) LoginScreen(repository, redirect, onRedirectHandled = { redirect = null })
-                else HomeScreen(repository, link, onLinkHandled = { link = null })
+                when {
+                    account == null -> LoginScreen(repository, redirect, onRedirectHandled = { redirect = null })
+                    Settings.appLock(this) && !AppLock.unlocked -> LockScreen()
+                    else -> HomeScreen(repository, link, onLinkHandled = { link = null })
+                }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // With the lock on, the app switcher must not show the calendar either.
+        if (Settings.appLock(this)) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Rotating the screen stops the activity too, but must not ask for the fingerprint again.
+        if (!isChangingConfigurations) AppLock.unlocked = false
     }
 
     override fun onNewIntent(intent: Intent) {

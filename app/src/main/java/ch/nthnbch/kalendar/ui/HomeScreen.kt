@@ -109,6 +109,7 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
     val selected = LocalDate.ofEpochDay(selectedEpochDay)
     var agendaMode by rememberSaveable { mutableStateOf(false) }
     var showCalendars by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     var detail by remember { mutableStateOf<Occurrence?>(null) }
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
 
@@ -160,6 +161,11 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
             }
         }
         onLinkHandled()
+    }
+
+    if (showSettings) {
+        SettingsScreen(onClose = { showSettings = false })
+        return
     }
 
     val request = editor
@@ -278,6 +284,7 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
             snapshot = snapshot,
             onDismiss = { showCalendars = false },
             onSync = { scope.launch { report(repository.sync(force = true)) } },
+            onSettings = { showCalendars = false; showSettings = true },
         )
     }
 
