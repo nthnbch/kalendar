@@ -9,6 +9,9 @@ object Settings {
 
     const val REPO_URL = "https://github.com/nthnbch/kalendar"
 
+    /** GitHub redirects this to the newest release, where the APK can be downloaded. */
+    const val LATEST_RELEASE_URL = "$REPO_URL/releases/latest"
+
     /** Languages the app is translated into, as BCP 47 tags. */
     val LANGUAGES = listOf("en", "fr", "de", "es")
 

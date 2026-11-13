@@ -116,6 +116,7 @@
     <string name="settings_lock_unavailable">Richte zuerst in den Systemeinstellungen eine Bildschirmsperre ein (Fingerabdruck, PIN, Muster oder Passwort).</string>
     <string name="settings_about">Info</string>
     <string name="settings_version">Version</string>
+    <string name="settings_latest">Neueste Version herunterladen</string>
     <string name="settings_source">Quellcode auf GitHub</string>
     <string name="lock_title">Kalendar entsperren</string>
     <string name="lock_text">Kalendar ist gesperrt.</string>

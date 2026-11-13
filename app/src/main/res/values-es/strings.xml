@@ -116,6 +116,7 @@
     <string name="settings_lock_unavailable">Configura primero un bloqueo de pantalla (huella, PIN, patrón o contraseña) en los ajustes del sistema.</string>
     <string name="settings_about">Acerca de</string>
     <string name="settings_version">Versión</string>
+    <string name="settings_latest">Descargar la última versión</string>
     <string name="settings_source">Código fuente en GitHub</string>
     <string name="lock_title">Desbloquear Kalendar</string>
     <string name="lock_text">Kalendar está bloqueado.</string>

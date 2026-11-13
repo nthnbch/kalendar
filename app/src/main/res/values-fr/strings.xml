@@ -132,6 +132,7 @@
     <string name="settings_lock_unavailable">Configure d’abord un verrouillage d’écran (empreinte, code, schéma ou mot de passe) dans les réglages du système.</string>
     <string name="settings_about">À propos</string>
     <string name="settings_version">Version</string>
+    <string name="settings_latest">Télécharger la dernière version</string>
     <string name="settings_source">Code source sur GitHub</string>
     <string name="lock_title">Déverrouiller Kalendar</string>
     <string name="lock_text">Kalendar est verrouillé.</string>

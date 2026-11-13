@@ -124,15 +124,22 @@ fun SettingsScreen(onClose: () -> Unit) {
                 Text(stringResource(R.string.settings_version), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
                 Text(BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Column(
-                Modifier.fillMaxWidth()
-                    .clickable { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Settings.REPO_URL))) } }
-                    .padding(horizontal = 24.dp, vertical = 12.dp),
-            ) {
-                Text(stringResource(R.string.settings_source), style = MaterialTheme.typography.bodyLarge)
-                Text(Settings.REPO_URL, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-            }
+            LinkRow(stringResource(R.string.settings_latest), Settings.LATEST_RELEASE_URL)
+            LinkRow(stringResource(R.string.settings_source), Settings.REPO_URL)
         }
+    }
+}
+
+@Composable
+private fun LinkRow(title: String, url: String) {
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Text(url, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
 
