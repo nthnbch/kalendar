@@ -51,6 +51,11 @@ object Alarms {
         val now = Instant.now()
         val today = LocalDate.now(zone)
 
+        // Reminders are replayed from the last time we looked. The very first look must start before any reminder
+        // can be due, otherwise one firing before the first wake-up of the app would count as "already seen".
+        val state = context.getSharedPreferences("alarms", Context.MODE_PRIVATE)
+        if (!state.contains("last_fired")) state.edit().putLong("last_fired", now.toEpochMilli()).apply()
+
         // Widgets: next boundary among today's and tomorrow's events, at the latest next midnight.
         val midnight = today.plusDays(1).atStartOfDay(zone).toInstant()
         val boundary = snapshot.occurrences(today, today.plusDays(1), zone)
