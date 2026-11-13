@@ -83,7 +83,3 @@ app/src/main/java/ch/nthnbch/kalendar/
   ui/       écrans (Jetpack Compose)
   widget/   widgets Glance (agenda, mois)
 ```
-
-## Licence
-
-À définir par l'auteur.
