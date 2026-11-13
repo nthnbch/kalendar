@@ -8,11 +8,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.Preferences
+import androidx.glance.appwidget.state.getAppWidgetState
+import androidx.glance.state.PreferencesGlanceStateDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.LocalContext
+import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
@@ -46,6 +51,7 @@ import androidx.glance.text.TextStyle
 import ch.nthnbch.kalendar.R
 import ch.nthnbch.kalendar.data.Repository
 import ch.nthnbch.kalendar.data.Snapshot
+import ch.nthnbch.kalendar.ical.Occurrence
 import ch.nthnbch.kalendar.ui.Format
 import ch.nthnbch.kalendar.ui.Links
 import java.time.LocalDate
@@ -76,45 +82,72 @@ class ShiftMonthAction : ActionCallback {
     }
 }
 
+/** One event as written in a day cell: a short colored label. */
+private data class Chip(val title: String, val color: Int)
+
+/** Everything the layout needs, computed once per session off the main thread so that drawing is only layout. */
+private class MonthModel(val month: YearMonth, val shifted: Boolean, val start: LocalDate, val weeks: Int, val chips: Map<LocalDate, List<Chip>>)
+
 class MonthWidget : GlanceAppWidget() {
 
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repository = Repository.get(context)
-        repository.ensureLoaded()
+        val snapshot = repository.ensureLoaded()
+        val prefs = getAppWidgetState<Preferences>(context, PreferencesGlanceStateDefinition, id)
+        val today = LocalDate.now()
+        val current = YearMonth.from(today)
+        val offset = if (prefs[BASE] == index(current)) prefs[OFFSET] ?: 0 else 0
+        val model = withContext(Dispatchers.Default) { model(snapshot, current.plusMonths(offset.toLong()), offset != 0) }
         provideContent {
-            val snapshot by repository.state.collectAsState()
-            val tick by Widgets.tick.collectAsState()
-            val prefs = currentState<Preferences>()
-            GlanceTheme {
-                val today = remember(tick) { LocalDate.now() }
-                val current = YearMonth.from(today)
-                val offset = if (prefs[BASE] == index(current)) prefs[OFFSET] ?: 0 else 0
-                Month(snapshot, today, current.plusMonths(offset.toLong()), offset != 0)
-            }
+            // Redrawn from scratch by every update() (data change, month shift, new day): nothing to observe here.
+            GlanceTheme { Month(model, today) }
         }
     }
 
-    @Composable
-    private fun Month(snapshot: Snapshot, today: LocalDate, month: YearMonth, shifted: Boolean) {
-        val context = LocalContext.current
+    private fun model(snapshot: Snapshot, month: YearMonth, shifted: Boolean): MonthModel {
         val start = Format.gridStart(month)
         val weeks = Format.gridWeeks(month)
-        val dots = remember(snapshot, start, weeks) { dots(snapshot, start, weeks) }
+        val end = start.plusDays(weeks * 7L)
+        val byDay = HashMap<LocalDate, MutableList<Pair<Occurrence, Int>>>()
+        for (o in snapshot.occurrences(start, end)) {
+            val color = o.event.color ?: snapshot.calendar(o.calendarUrl)?.color ?: continue
+            var day = maxOf(o.firstDay, start)
+            val last = minOf(o.lastDay, end.minusDays(1))
+            while (!day.isAfter(last)) {
+                byDay.getOrPut(day) { ArrayList() } += o to color
+                day = day.plusDays(1)
+            }
+        }
+        // All-day events first, then by start time: the order of the agenda.
+        val chips = byDay.mapValues { (_, list) ->
+            list.sortedWith(compareBy({ !it.first.allDay }, { it.first.start }))
+                .map { (o, color) -> Chip(o.event.summary.ifBlank { "·" }, color) }
+        }
+        return MonthModel(month, shifted, start, weeks, chips)
+    }
 
-        Column(Widgets.surface().fillMaxSize().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 10.dp)) {
+    @Composable
+    private fun Month(model: MonthModel, today: LocalDate) {
+        val context = LocalContext.current
+        val month = model.month
+        // Room left for event labels in a cell: height of the grid / weeks, minus the day number.
+        val cellHeight = (LocalSize.current.height.value - 8 - 10 - 34 - 15) / model.weeks
+        val lines = ((cellHeight - 22) / 12).toInt().coerceIn(0, 4)
+
+        Column(Widgets.surface().fillMaxSize().padding(start = 6.dp, end = 6.dp, top = 8.dp, bottom = 8.dp)) {
             Row(GlanceModifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = Format.month(month, withYear = month.year != today.year),
                     style = TextStyle(
-                        color = if (shifted) GlanceTheme.colors.onSurface else GlanceTheme.colors.primary,
+                        color = if (model.shifted) GlanceTheme.colors.onSurface else GlanceTheme.colors.primary,
                         fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     ),
                     maxLines = 1,
                     modifier = GlanceModifier.defaultWeight().clickable(
                         // Tapping the title comes back to today when browsing, opens the app otherwise.
-                        if (shifted) actionRunCallback<ShiftMonthAction>(actionParametersOf(DELTA to 0))
+                        if (model.shifted) actionRunCallback<ShiftMonthAction>(actionParametersOf(DELTA to 0))
                         else actionStartActivity(Links.day(context, today)),
                     ),
                 )
@@ -132,11 +165,11 @@ class MonthWidget : GlanceAppWidget() {
                 }
             }
 
-            for (week in 0 until weeks) {
+            for (week in 0 until model.weeks) {
                 Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
                     for (d in 0 until 7) {
-                        val day = start.plusDays((week * 7 + d).toLong())
-                        DayCell(day, today, inMonth = YearMonth.from(day) == month, colors = dots[day].orEmpty(), modifier = GlanceModifier.defaultWeight())
+                        val day = model.start.plusDays((week * 7 + d).toLong())
+                        DayCell(day, today, YearMonth.from(day) == month, model.chips[day].orEmpty(), lines, GlanceModifier.defaultWeight())
                     }
                 }
             }
@@ -144,17 +177,17 @@ class MonthWidget : GlanceAppWidget() {
     }
 
     @Composable
-    private fun DayCell(day: LocalDate, today: LocalDate, inMonth: Boolean, colors: List<Int>, modifier: GlanceModifier) {
+    private fun DayCell(day: LocalDate, today: LocalDate, inMonth: Boolean, chips: List<Chip>, lines: Int, modifier: GlanceModifier) {
         val context = LocalContext.current
         val isToday = day == today
+        val alpha = if (inMonth) 1f else 0.45f
         Column(
-            modifier.fillMaxHeight().clickable(actionStartActivity(Links.day(context, day))),
+            modifier.fillMaxHeight().padding(horizontal = 1.dp).clickable(actionStartActivity(Links.day(context, day))),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                GlanceModifier.size(26.dp)
-                    .then(if (isToday) GlanceModifier.background(GlanceTheme.colors.primary).cornerRadius(13.dp) else GlanceModifier),
+                GlanceModifier.size(22.dp)
+                    .then(if (isToday) GlanceModifier.background(GlanceTheme.colors.primary).cornerRadius(11.dp) else GlanceModifier),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -165,35 +198,43 @@ class MonthWidget : GlanceAppWidget() {
                             inMonth -> GlanceTheme.colors.onSurface
                             else -> GlanceTheme.colors.outline
                         },
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = if (isToday) FontWeight.Bold else FontWeight.Medium,
                         textAlign = TextAlign.Center,
                     ),
                 )
             }
-            // The dot row always takes its height so numbers stay aligned across cells.
-            Row(GlanceModifier.height(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                colors.take(3).forEachIndexed { i, color ->
-                    if (i > 0) Spacer(GlanceModifier.width(2.dp))
-                    Box(GlanceModifier.size(5.dp).background(Widgets.tint(color, if (inMonth) 1f else 0.4f)).cornerRadius(3.dp)) {}
+            if (lines == 0) {
+                // Too small for labels: colored dots are all that fits.
+                Row(GlanceModifier.height(6.dp).padding(top = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                    chips.map { it.color }.distinct().take(3).forEachIndexed { i, color ->
+                        if (i > 0) Spacer(GlanceModifier.width(2.dp))
+                        Box(GlanceModifier.size(5.dp).background(Widgets.tint(color, alpha)).cornerRadius(3.dp)) {}
+                    }
+                }
+            } else {
+                val overflow = chips.size > lines
+                val shown = if (overflow) chips.take(lines - 1) else chips
+                for (chip in shown) {
+                    Box(GlanceModifier.fillMaxWidth().padding(top = 1.dp)) {
+                        Text(
+                            text = chip.title,
+                            maxLines = 1,
+                            style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 9.sp, fontWeight = FontWeight.Medium),
+                            modifier = GlanceModifier.fillMaxWidth()
+                                .background(Widgets.tint(chip.color, if (inMonth) 0.30f else 0.12f))
+                                .cornerRadius(3.dp).padding(horizontal = 2.dp),
+                        )
+                    }
+                }
+                if (overflow) {
+                    Text(
+                        text = "+" + (chips.size - shown.size),
+                        maxLines = 1,
+                        style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 9.sp),
+                    )
                 }
             }
         }
-    }
-
-    private fun dots(snapshot: Snapshot, start: LocalDate, weeks: Int): Map<LocalDate, List<Int>> {
-        val end = start.plusDays(weeks * 7L)
-        val out = HashMap<LocalDate, MutableList<Int>>()
-        for (o in snapshot.occurrences(start, end)) {
-            val color = o.event.color ?: snapshot.calendar(o.calendarUrl)?.color ?: continue
-            var day = maxOf(o.firstDay, start)
-            val last = minOf(o.lastDay, end.minusDays(1))
-            while (!day.isAfter(last)) {
-                val list = out.getOrPut(day) { ArrayList() }
-                if (color !in list) list += color
-                day = day.plusDays(1)
-            }
-        }
-        return out
     }
 }

@@ -11,6 +11,7 @@ import ch.nthnbch.kalendar.ical.EventResource
 import ch.nthnbch.kalendar.ical.EventWriter
 import ch.nthnbch.kalendar.ical.Occurrence
 import ch.nthnbch.kalendar.ical.Recurrence
+import ch.nthnbch.kalendar.ical.Scope
 import ch.nthnbch.kalendar.widget.Widgets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -58,6 +59,8 @@ sealed interface SyncOutcome {
     data object Success : SyncOutcome
     data object NotSignedIn : SyncOutcome
     data object AuthFailed : SyncOutcome
+    /** No connection (or the server cannot be reached): the stored copy is shown, nothing is lost. */
+    data object Offline : SyncOutcome
     data class Failed(val message: String) : SyncOutcome
 }
 
@@ -158,6 +161,7 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun sync(force: Boolean = false): SyncOutcome = withContext(Dispatchers.IO) {
         val account = _account.value ?: return@withContext SyncOutcome.NotSignedIn
+        if (!Network.isOnline(context)) return@withContext SyncOutcome.Offline
         syncMutex.withLock {
             _syncing.value = true
             try {
@@ -170,7 +174,8 @@ class Repository private constructor(private val context: Context) {
                 _authFailed.value = true
                 SyncOutcome.AuthFailed
             } catch (e: Exception) {
-                SyncOutcome.Failed(e.message ?: e.javaClass.simpleName)
+                if (Network.isConnectivityFailure(e)) SyncOutcome.Offline
+                else SyncOutcome.Failed(e.message ?: e.javaClass.simpleName)
             } finally {
                 reload()
                 _syncing.value = false
@@ -221,13 +226,33 @@ class Repository private constructor(private val context: Context) {
     /**
      * Creates the event, or rewrites [existing]. Throws on failure so the editor can keep the user's input.
      */
-    suspend fun save(calendarUrl: String, draft: EventDraft, existing: EventResource?) = withContext(Dispatchers.IO) {
+    suspend fun save(
+        calendarUrl: String,
+        draft: EventDraft,
+        existing: EventResource?,
+        scope: Scope = Scope.ALL,
+        occurrence: Occurrence? = null,
+    ) = withContext(Dispatchers.IO) {
         val account = _account.value ?: throw IllegalStateException("Not signed in")
+        if (!Network.isOnline(context)) throw OfflineException()
         val client = CalDavClient(account.dav)
+        val draft = draft.copy(organizerEmail = account.email)
+        val zone = ZoneId.systemDefault()
+        val newUid = EventWriter.newUid()
+        val split = if (existing != null && scope == Scope.FOLLOWING && occurrence != null) {
+            EventWriter.splitSeries(existing.ics, draft, slotOf(existing, occurrence), zone, newUid)
+        } else null
         try {
             if (existing == null) {
-                val uid = EventWriter.newUid()
-                store(client, calendarUrl, "$calendarUrl$uid.ics", EventWriter.create(draft, uid), etag = null)
+                store(client, calendarUrl, "$calendarUrl$newUid.ics", EventWriter.create(draft, newUid), etag = null)
+            } else if (scope == Scope.THIS && occurrence != null) {
+                val slot = slotOf(existing, occurrence)
+                val ics = EventWriter.updateOccurrence(existing.ics, draft, slot, zone) ?: throw IllegalStateException("Unreadable event")
+                store(client, existing.calendarUrl, existing.href, ics, existing.etag)
+            } else if (split != null && existing != null) {
+                // The new series first: if the second write fails the user sees a duplicate, never a lost event.
+                store(client, existing.calendarUrl, "${existing.calendarUrl}$newUid.ics", split.created, etag = null)
+                store(client, existing.calendarUrl, existing.href, split.truncated, existing.etag)
             } else {
                 val ics = EventWriter.update(existing.ics, draft) ?: throw IllegalStateException("Unreadable event")
                 if (existing.calendarUrl == calendarUrl) {
@@ -251,23 +276,18 @@ class Repository private constructor(private val context: Context) {
     }
 
     /** Deletes the whole event, or just [occurrence] when [onlyThisOne] is set on a recurring event. */
-    suspend fun delete(occurrence: Occurrence, onlyThisOne: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun delete(occurrence: Occurrence, scope: Scope) = withContext(Dispatchers.IO) {
         val account = _account.value ?: throw IllegalStateException("Not signed in")
+        if (!Network.isOnline(context)) throw OfflineException()
         val resource = _state.value.resource(occurrence.href) ?: return@withContext
         val client = CalDavClient(account.dav)
         try {
-            val without = if (onlyThisOne) {
-                if (occurrence.event.recurrenceKey != null) {
-                    // An override stands for exactly one occurrence: exclude the slot it replaces.
-                    val master = resource.events.firstOrNull { it.recurrenceKey == null }
-                    val slot = master?.let { m ->
-                        Recurrence.originalStartOf(m, occurrence.event.recurrenceKey, ZoneId.systemDefault())
-                    }
-                    slot?.let { EventWriter.excludeOccurrence(resource.ics, it, ZoneId.systemDefault()) }
-                } else {
-                    EventWriter.excludeOccurrence(resource.ics, occurrence.originalStart, ZoneId.systemDefault())
-                }
-            } else null
+            val zone = ZoneId.systemDefault()
+            val without = when (scope) {
+                Scope.ALL -> null
+                Scope.THIS -> EventWriter.excludeOccurrence(resource.ics, slotOf(resource, occurrence), zone)
+                Scope.FOLLOWING -> EventWriter.truncateSeries(resource.ics, slotOf(resource, occurrence), zone)
+            }
 
             if (without != null) {
                 store(client, resource.calendarUrl, resource.href, without, resource.etag)
@@ -283,6 +303,31 @@ class Repository private constructor(private val context: Context) {
             reload()
             afterChange()
         }
+    }
+
+    /** Answers an invitation as the signed-in user; the server forwards the reply to the organizer. */
+    suspend fun respond(href: String, status: String) = withContext(Dispatchers.IO) {
+        val account = _account.value ?: throw IllegalStateException("Not signed in")
+        if (!Network.isOnline(context)) throw OfflineException()
+        val email = account.email ?: throw IllegalStateException("Unknown address")
+        val resource = _state.value.resource(href) ?: return@withContext
+        val ics = EventWriter.respond(resource.ics, email, status) ?: throw IllegalStateException("Not invited")
+        try {
+            store(CalDavClient(account.dav), resource.calendarUrl, resource.href, ics, resource.etag)
+        } catch (e: ConflictException) {
+            sync(force = true)
+            throw e
+        } finally {
+            reload()
+            afterChange()
+        }
+    }
+
+    /** Start of the slot an occurrence fills in its series, in the master's own zone (what EXDATE / RECURRENCE-ID name). */
+    private fun slotOf(resource: EventResource, occurrence: Occurrence): java.time.LocalDateTime {
+        val key = occurrence.event.recurrenceKey ?: return occurrence.originalStart
+        val master = resource.events.firstOrNull { it.recurrenceKey == null } ?: return occurrence.originalStart
+        return Recurrence.originalStartOf(master, key, ZoneId.systemDefault())
     }
 
     private fun store(client: CalDavClient, calendarUrl: String, url: String, ics: String, etag: String?) {

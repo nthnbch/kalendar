@@ -4,7 +4,7 @@
     <string name="widget_agenda_name">Agenda</string>
     <string name="widget_month_name">Month</string>
     <string name="widget_agenda_description">Your upcoming events, day by day</string>
-    <string name="widget_month_description">The month at a glance, with your busy days</string>
+    <string name="widget_month_description">The month at a glance, with the names of your events</string>
     <string name="channel_reminders">Event reminders</string>
     <string name="untitled">(No title)</string>
     <string name="all_day">All day</string>
@@ -104,4 +104,17 @@
     <string name="login_not_configured">This build has no Infomaniak application id (infomaniakClientId in local.properties).</string>
     <string name="login_no_browser">No browser available to open the sign-in page.</string>
     <string name="login_open_assistant">Open the Infomaniak sync assistant</string>
+    <string name="edit_which">Edit which events?</string>
+    <string name="scope_following">This and following</string>
+    <string name="editing_this">Changes apply to this occurrence only.</string>
+    <string name="editing_following">Changes apply to this occurrence and all the following ones.</string>
+    <string name="organized_by">Organizer: %1$s</string>
+    <string name="your_reply">Your reply</string>
+    <string name="reply_yes">Yes</string>
+    <string name="reply_maybe">Maybe</string>
+    <string name="reply_no">No</string>
+    <string name="reply_sent">Reply sent</string>
+    <string name="guests_hint">E-mail addresses, separated by commas. They get an invitation.</string>
+    <string name="offline">No connection. Showing the last synced events.</string>
+    <string name="offline_not_saved">No connection: nothing was changed. Try again once you are online.</string>
 </resources>

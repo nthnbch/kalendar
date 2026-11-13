@@ -18,6 +18,11 @@ class IcsComponent(val name: String) {
     fun props(key: String): List<IcsProp> = props.filter { it.name.equals(key, ignoreCase = true) }
     fun children(key: String): List<IcsComponent> = children.filter { it.name.equals(key, ignoreCase = true) }
 
+    fun deepCopy(): IcsComponent = IcsComponent(name).also { copy ->
+        copy.props.addAll(props)
+        copy.children.addAll(children.map { it.deepCopy() })
+    }
+
     fun remove(key: String) {
         props.removeAll { it.name.equals(key, ignoreCase = true) }
     }

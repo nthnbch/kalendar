@@ -52,6 +52,7 @@ import ch.nthnbch.kalendar.data.Repository
 import ch.nthnbch.kalendar.data.Snapshot
 import ch.nthnbch.kalendar.data.SyncWorker
 import ch.nthnbch.kalendar.ical.Occurrence
+import ch.nthnbch.kalendar.ical.Scope
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,8 +61,10 @@ fun EventDetailSheet(
     snapshot: Snapshot,
     occurrence: Occurrence,
     onDismiss: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: (onlyThisOne: Boolean) -> Unit,
+    myEmail: String?,
+    onEdit: (Scope) -> Unit,
+    onRespond: (String) -> Unit,
+    onDelete: (Scope) -> Unit,
 ) {
     val context = LocalContext.current
     val event = occurrence.event
@@ -69,6 +72,8 @@ fun EventDetailSheet(
     val resource = snapshot.resource(occurrence.href)
     val recurring = event.recurrenceKey != null || resource?.events?.any { it.isRecurring } == true
     var confirmDelete by remember { mutableStateOf(false) }
+    var chooseEdit by remember { mutableStateOf(false) }
+    val mine = myEmail?.let { me -> event.attendees.firstOrNull { it.email.equals(me, ignoreCase = true) } }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -92,7 +97,25 @@ fun EventDetailSheet(
                 Field(stringResource(R.string.field_reminder), event.alarms.joinToString(", ") { reminderLabel(context, it) })
             }
             if (event.attendees.isNotEmpty()) {
-                Field(stringResource(R.string.field_guests), event.attendees.joinToString("\n") { it.name })
+                val organizer = event.organizer?.let { stringResource(R.string.organized_by, it) }
+                Field(
+                    stringResource(R.string.field_guests),
+                    (listOfNotNull(organizer) + event.attendees.map { "${statusMark(it.status)} ${it.name}" }).joinToString("\n"),
+                )
+            }
+            if (mine != null && calendar != null && !calendar.readOnly) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(R.string.your_reply), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for ((status, label) in listOf(
+                            "ACCEPTED" to R.string.reply_yes, "TENTATIVE" to R.string.reply_maybe, "DECLINED" to R.string.reply_no,
+                        )) {
+                            val selected = mine.status.equals(status, ignoreCase = true)
+                            if (selected) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text(stringResource(label)) }
+                            else OutlinedButton(onClick = { onRespond(status) }, modifier = Modifier.weight(1f)) { Text(stringResource(label)) }
+                        }
+                    }
+                }
             }
             if (event.description.isNotBlank()) Field(stringResource(R.string.field_notes), event.description)
             event.url?.let { url ->
@@ -106,8 +129,8 @@ fun EventDetailSheet(
                     OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                     }
-                    Button(onClick = onEdit, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(if (recurring) R.string.edit_series else R.string.edit))
+                    Button(onClick = { if (recurring) chooseEdit = true else onEdit(Scope.ALL) }, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.edit))
                     }
                 }
             }
@@ -122,12 +145,13 @@ fun EventDetailSheet(
             confirmButton = {
                 Column(horizontalAlignment = Alignment.End) {
                     if (recurring) {
-                        TextButton(onClick = { confirmDelete = false; onDelete(true) }) { Text(stringResource(R.string.delete_this_one)) }
-                        TextButton(onClick = { confirmDelete = false; onDelete(false) }) {
+                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
+                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
+                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.ALL) }) {
                             Text(stringResource(R.string.delete_series), color = MaterialTheme.colorScheme.error)
                         }
                     } else {
-                        TextButton(onClick = { confirmDelete = false; onDelete(false) }) {
+                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.ALL) }) {
                             Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -136,6 +160,30 @@ fun EventDetailSheet(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+
+    if (chooseEdit) {
+        AlertDialog(
+            onDismissRequest = { chooseEdit = false },
+            title = { Text(stringResource(R.string.edit_which)) },
+            text = {
+                Column {
+                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
+                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
+                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.ALL) }) { Text(stringResource(R.string.delete_series)) }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { chooseEdit = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+}
+
+@Composable
+private fun statusMark(status: String?): String = when (status?.uppercase()) {
+    "ACCEPTED" -> "✓"
+    "DECLINED" -> "✗"
+    "TENTATIVE" -> "?"
+    else -> "·"
 }
 
 @Composable

@@ -20,7 +20,17 @@ data class EventDraft(
     val zone: ZoneId,
     val rrule: String? = null,
     val alarms: List<Int> = emptyList(),
+    /** Guest e-mail addresses. Null leaves the invitations of an existing event untouched. */
+    val guests: List<String>? = null,
+    /** The account's own address, used as ORGANIZER when guests are added to an event that has none. */
+    val organizerEmail: String? = null,
 )
+
+/** Which part of a recurring series an edit or a deletion applies to. */
+enum class Scope { THIS, FOLLOWING, ALL }
+
+/** Result of splitting a series: the old file cut short, and the file for the part that starts at the split. */
+data class SeriesSplit(val truncated: String, val created: String)
 
 object EventWriter {
 
@@ -64,37 +74,187 @@ object EventWriter {
         return Ics.serialize(calendar)
     }
 
+    /** A date property (EXDATE, RECURRENCE-ID…) naming [slot] in the same form as the master's DTSTART. */
+    private fun slotProp(name: String, dtStart: IcsProp, slot: LocalDateTime): IcsProp {
+        val parsed = EventParser.parseDate(dtStart)
+        return when {
+            parsed?.isDate == true -> IcsProp(name, listOf("VALUE" to "DATE"), slot.toLocalDate().format(DATE))
+            dtStart.value.trim().endsWith("Z", ignoreCase = true) -> IcsProp(name, value = slot.format(DATE_TIME) + "Z")
+            else -> IcsProp(name, dtStart.params.filter { it.first == "TZID" }, slot.format(DATE_TIME))
+        }
+    }
+
+    private fun masterOf(calendar: IcsComponent): IcsComponent? =
+        calendar.children("VEVENT").firstOrNull { it.prop("RECURRENCE-ID") == null }
+
+    /** The override standing for the occurrence with [key], if any. */
+    private fun overrideFor(calendar: IcsComponent, master: VEvent, key: Long, deviceZone: ZoneId): IcsComponent? =
+        calendar.children("VEVENT").firstOrNull { child ->
+            child.prop("RECURRENCE-ID")?.let(EventParser::parseDate)?.let { d ->
+                master.keyOf(EventParser.localIn(d, master.allDay, master.zone, deviceZone), deviceZone) == key
+            } == true
+        }
+
     /** Removes one occurrence of a series by excluding its start, and drops its override if it had one. */
     fun excludeOccurrence(ics: String, originalStart: LocalDateTime, deviceZone: ZoneId, now: Instant = Instant.now()): String? {
         val calendar = Ics.parse(ics)?.takeIf { it.name == "VCALENDAR" } ?: return null
-        val master = calendar.children("VEVENT").firstOrNull { it.prop("RECURRENCE-ID") == null } ?: return null
+        val master = masterOf(calendar) ?: return null
         val dtStart = master.prop("DTSTART") ?: return null
-        val parsedStart = EventParser.parseDate(dtStart) ?: return null
+        master.props += slotProp("EXDATE", dtStart, originalStart)
 
-        val exdate = when {
-            parsedStart.isDate -> IcsProp("EXDATE", listOf("VALUE" to "DATE"), originalStart.toLocalDate().format(DATE))
-            dtStart.value.trim().endsWith("Z", ignoreCase = true) -> IcsProp("EXDATE", value = originalStart.format(DATE_TIME) + "Z")
-            else -> IcsProp("EXDATE", dtStart.params.filter { it.first == "TZID" }, originalStart.format(DATE_TIME))
-        }
-        master.props += exdate
-
-        val parsed = EventParser.parse(ics, deviceZone)
-        val masterEvent = parsed.firstOrNull { it.recurrenceKey == null }
+        val masterEvent = EventParser.parse(ics, deviceZone).firstOrNull { it.recurrenceKey == null }
         if (masterEvent != null) {
-            val key = masterEvent.keyOf(originalStart, deviceZone)
-            val uid = master.prop("UID")?.value
-            calendar.children.removeAll { child ->
-                child.name == "VEVENT" && child !== master && child.prop("UID")?.value == uid &&
-                    child.prop("RECURRENCE-ID")?.let(EventParser::parseDate)?.let { d ->
-                        val local = if (masterEvent.zone != null && d.zone != null) {
-                            d.local.atZone(d.zone).withZoneSameInstant(masterEvent.zone).toLocalDateTime()
-                        } else d.local
-                        masterEvent.keyOf(local, deviceZone) == key
-                    } == true
-            }
+            overrideFor(calendar, masterEvent, masterEvent.keyOf(originalStart, deviceZone), deviceZone)
+                ?.let { calendar.children.remove(it) }
         }
         master.set(IcsProp("LAST-MODIFIED", value = utc(now)))
         return Ics.serialize(calendar)
+    }
+
+    /** Changes a single occurrence of a series by writing (or rewriting) an override that carries RECURRENCE-ID. */
+    fun updateOccurrence(
+        ics: String, draft: EventDraft, slot: LocalDateTime, deviceZone: ZoneId, now: Instant = Instant.now(),
+    ): String? {
+        val calendar = Ics.parse(ics)?.takeIf { it.name == "VCALENDAR" } ?: return null
+        val master = masterOf(calendar) ?: return null
+        val masterEvent = EventParser.parse(ics, deviceZone).firstOrNull { it.recurrenceKey == null } ?: return null
+        val dtStart = master.prop("DTSTART") ?: return null
+
+        val existing = overrideFor(calendar, masterEvent, masterEvent.keyOf(slot, deviceZone), deviceZone)
+        val target = existing ?: master.deepCopy().also { copy ->
+            listOf("RRULE", "RDATE", "EXDATE", "SEQUENCE", "CREATED").forEach(copy::remove)
+            copy.set(slotProp("RECURRENCE-ID", dtStart, slot))
+            calendar.children.add(calendar.children.indexOf(master) + 1, copy)
+        }
+        // The draft's guests are applied to the series, not to a single occurrence.
+        apply(calendar, target, draft.copy(rrule = null, guests = null), now)
+        bump(target)
+        return Ics.serialize(calendar)
+    }
+
+    /**
+     * "This and the following": the series ends just before [slot], and a new series (new UID) carries the edit from there.
+     * Null when [slot] is the first occurrence (that is simply an edit of the whole series).
+     */
+    fun splitSeries(
+        ics: String, draft: EventDraft, slot: LocalDateTime, deviceZone: ZoneId, newUid: String, now: Instant = Instant.now(),
+    ): SeriesSplit? {
+        val calendar = Ics.parse(ics)?.takeIf { it.name == "VCALENDAR" } ?: return null
+        val master = masterOf(calendar) ?: return null
+        val masterEvent = EventParser.parse(ics, deviceZone).firstOrNull { it.recurrenceKey == null } ?: return null
+        val dtStart = master.prop("DTSTART") ?: return null
+        val rrule = masterEvent.rrule ?: return null
+        val slotKey = masterEvent.keyOf(slot, deviceZone)
+        if (slotKey <= masterEvent.keyOf(masterEvent.start, deviceZone)) return null
+
+        // The copy for the new series is taken before the old one is cut.
+        val fresh = calendar.deepCopy()
+        val before = Recurrence.countBefore(masterEvent, slot)
+
+        cutBefore(calendar, master, masterEvent, dtStart, rrule, slot, slotKey, deviceZone)
+        bump(master)
+
+        // New series: same event (guests, extensions…) with the edit applied, starting at the split.
+        val newMaster = masterOf(fresh) ?: return null
+        fresh.children.removeAll { it.name == "VEVENT" && it !== newMaster }
+        listOf("RECURRENCE-ID", "EXDATE", "RDATE", "SEQUENCE").forEach(newMaster::remove)
+        newMaster.set(IcsProp("UID", value = newUid))
+        val countMatches = Regex("COUNT=(\\d+)").find(draft.rrule.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+        val adjusted = draft.rrule?.let { r ->
+            if (countMatches != null && countMatches == Regex("COUNT=(\\d+)").find(rrule)?.groupValues?.get(1)?.toIntOrNull()) {
+                r.replace(Regex("COUNT=\\d+"), "COUNT=${(countMatches - before).coerceAtLeast(1)}")
+            } else r
+        }
+        apply(fresh, newMaster, draft.copy(rrule = adjusted), now)
+        newMaster.set(IcsProp("CREATED", value = utc(now)))
+        return SeriesSplit(Ics.serialize(calendar), Ics.serialize(fresh))
+    }
+
+    /** Ends the series just before [slot] ("delete this and the following"). Null if [slot] is the first occurrence. */
+    fun truncateSeries(ics: String, slot: LocalDateTime, deviceZone: ZoneId): String? {
+        val calendar = Ics.parse(ics)?.takeIf { it.name == "VCALENDAR" } ?: return null
+        val master = masterOf(calendar) ?: return null
+        val masterEvent = EventParser.parse(ics, deviceZone).firstOrNull { it.recurrenceKey == null } ?: return null
+        val dtStart = master.prop("DTSTART") ?: return null
+        val rrule = masterEvent.rrule ?: return null
+        val slotKey = masterEvent.keyOf(slot, deviceZone)
+        if (slotKey <= masterEvent.keyOf(masterEvent.start, deviceZone)) return null
+        cutBefore(calendar, master, masterEvent, dtStart, rrule, slot, slotKey, deviceZone)
+        bump(master)
+        return Ics.serialize(calendar)
+    }
+
+    private fun cutBefore(
+        calendar: IcsComponent, master: IcsComponent, masterEvent: VEvent, dtStart: IcsProp, rrule: String,
+        slot: LocalDateTime, slotKey: Long, deviceZone: ZoneId,
+    ) {
+        // Old series: stop one second (one day for all-day events) before the split.
+        val untilProp = when {
+            masterEvent.allDay -> slot.toLocalDate().minusDays(1).format(DATE)
+            masterEvent.zone != null || dtStart.value.trim().endsWith("Z", ignoreCase = true) ->
+                utc(slot.atZone(masterEvent.zone ?: deviceZone).toInstant().minusSeconds(1))
+            else -> slot.minusSeconds(1).format(DATE_TIME)
+        }
+        master.set(IcsProp("RRULE", value = withUntil(rrule, untilProp)))
+        master.props.removeAll { p -> p.name == "EXDATE" && exdateKeys(p, masterEvent, deviceZone).any { it >= slotKey } }
+        calendar.children.removeAll { child ->
+            child !== master && child.name == "VEVENT" && child.prop("RECURRENCE-ID")?.let(EventParser::parseDate)?.let { d ->
+                masterEvent.keyOf(EventParser.localIn(d, masterEvent.allDay, masterEvent.zone, deviceZone), deviceZone) >= slotKey
+            } == true
+        }
+    }
+
+    private fun exdateKeys(p: IcsProp, master: VEvent, deviceZone: ZoneId): List<Long> =
+        p.value.split(',').mapNotNull { v ->
+            EventParser.parseDate(p.copy(value = v.trim()))?.let {
+                master.keyOf(EventParser.localIn(it, master.allDay, master.zone, deviceZone), deviceZone)
+            }
+        }
+
+    private fun withUntil(rrule: String, until: String): String =
+        rrule.split(';').filter { it.isNotBlank() && !it.startsWith("COUNT=", true) && !it.startsWith("UNTIL=", true) }
+            .plus("UNTIL=$until").joinToString(";")
+
+    /**
+     * Answers an invitation: sets PARTSTAT for the attendee whose address is [email] (on every VEVENT of the file).
+     * The server forwards the reply to the organizer. Null when [email] is not among the attendees.
+     */
+    fun respond(ics: String, email: String, status: String, now: Instant = Instant.now()): String? {
+        val calendar = Ics.parse(ics)?.takeIf { it.name == "VCALENDAR" } ?: return null
+        var found = false
+        for (event in calendar.children("VEVENT")) {
+            val mine = event.props.indices.filter { i ->
+                val p = event.props[i]
+                p.name == "ATTENDEE" && EventParser.stripMailto(p.value).equals(email.trim(), ignoreCase = true)
+            }
+            for (i in mine) {
+                val p = event.props[i]
+                event.props[i] = p.copy(params = p.params.filter { it.first != "PARTSTAT" && it.first != "RSVP" } + ("PARTSTAT" to status))
+                found = true
+            }
+            if (mine.isNotEmpty()) event.set(IcsProp("DTSTAMP", value = utc(now)))
+        }
+        return if (found) Ics.serialize(calendar) else null
+    }
+
+    private fun bump(event: IcsComponent) {
+        val sequence = event.prop("SEQUENCE")?.value?.trim()?.toIntOrNull() ?: 0
+        event.set(IcsProp("SEQUENCE", value = (sequence + 1).toString()))
+    }
+
+    /** Aligns the ATTENDEE list with [guests]; people already invited keep their reply. */
+    private fun applyGuests(event: IcsComponent, guests: List<String>, organizerEmail: String?) {
+        val wanted = guests.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+        event.props.removeAll { p ->
+            p.name == "ATTENDEE" && wanted.none { it.equals(EventParser.stripMailto(p.value), ignoreCase = true) }
+        }
+        val known = event.props("ATTENDEE").map { EventParser.stripMailto(it.value).lowercase() }.toSet()
+        for (guest in wanted.filter { it.lowercase() !in known }) {
+            event.props += IcsProp("ATTENDEE", listOf("PARTSTAT" to "NEEDS-ACTION", "RSVP" to "TRUE"), "mailto:$guest")
+        }
+        if (wanted.isNotEmpty() && event.prop("ORGANIZER") == null && !organizerEmail.isNullOrBlank()) {
+            event.set(IcsProp("ORGANIZER", value = "mailto:${organizerEmail.trim()}"))
+        }
     }
 
     private fun apply(calendar: IcsComponent, event: IcsComponent, draft: EventDraft, now: Instant) {
@@ -128,6 +288,8 @@ object EventWriter {
         }
 
         if (draft.rrule.isNullOrBlank()) event.remove("RRULE") else event.set(IcsProp("RRULE", value = draft.rrule))
+
+        draft.guests?.let { applyGuests(event, it, draft.organizerEmail) }
 
         event.children.removeAll { it.name == "VALARM" }
         for (minutes in draft.alarms.distinct()) {

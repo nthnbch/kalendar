@@ -38,6 +38,27 @@ object Recurrence {
         return out
     }
 
+    /** How many occurrences the rule produces before [before] (EXDATEs included, as RFC 5545 counts them). */
+    fun countBefore(event: VEvent, before: LocalDateTime): Int {
+        val text = event.rrule ?: return 0
+        return try {
+            val rule = RecurrenceRule(text, RecurrenceRule.RfcMode.RFC5545_LAX)
+            val first = toDateTime(event, event.start)
+            alignUntil(rule, first, event)
+            val iterator = rule.iterator(first)
+            var count = 0
+            while (iterator.hasNext() && count < MAX_STEPS) {
+                val next = iterator.nextDateTime()
+                val local = LocalDateTime.of(next.year, next.month + 1, next.dayOfMonth, next.hours, next.minutes, next.seconds)
+                if (!local.isBefore(before)) break
+                count++
+            }
+            count
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     /** Inverse of [VEvent.keyOf]: the local start, in the master's zone, of the occurrence with that key. */
     fun originalStartOf(master: VEvent, key: Long, deviceZone: ZoneId): LocalDateTime =
         if (master.allDay) java.time.LocalDate.ofEpochDay(key).atStartOfDay()

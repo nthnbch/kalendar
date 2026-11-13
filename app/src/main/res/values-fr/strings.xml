@@ -3,7 +3,7 @@
     <string name="widget_agenda_name">Agenda</string>
     <string name="widget_month_name">Mois</string>
     <string name="widget_agenda_description">Tes prochains événements, jour après jour</string>
-    <string name="widget_month_description">Le mois d’un coup d’œil, avec tes jours chargés</string>
+    <string name="widget_month_description">Le mois d’un coup d’œil, avec le nom de tes événements</string>
     <string name="channel_reminders">Rappels d’événements</string>
     <string name="untitled">(Sans titre)</string>
     <string name="all_day">Toute la journée</string>
@@ -103,4 +103,17 @@
     <string name="login_not_configured">Cette version n’a pas d’identifiant d’application Infomaniak (infomaniakClientId dans local.properties).</string>
     <string name="login_no_browser">Aucun navigateur disponible pour ouvrir la page de connexion.</string>
     <string name="login_open_assistant">Ouvrir l’assistant de synchronisation Infomaniak</string>
+    <string name="edit_which">Modifier quels événements ?</string>
+    <string name="scope_following">Celui-ci et les suivants</string>
+    <string name="editing_this">Les changements ne s’appliquent qu’à cette occurrence.</string>
+    <string name="editing_following">Les changements s’appliquent à cette occurrence et aux suivantes.</string>
+    <string name="organized_by">Organisateur : %1$s</string>
+    <string name="your_reply">Votre réponse</string>
+    <string name="reply_yes">Oui</string>
+    <string name="reply_maybe">Peut-être</string>
+    <string name="reply_no">Non</string>
+    <string name="reply_sent">Réponse envoyée</string>
+    <string name="guests_hint">Adresses e-mail séparées par des virgules. Ils reçoivent une invitation.</string>
+    <string name="offline">Pas de connexion. Affichage des derniers événements synchronisés.</string>
+    <string name="offline_not_saved">Pas de connexion : rien n’a été modifié. Réessayez une fois en ligne.</string>
 </resources>

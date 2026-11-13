@@ -28,13 +28,7 @@ object EventParser {
         val zone = if (allDay) null else dtStart.zone
         val start = dtStart.local
 
-        fun inEventZone(d: IcsDate): LocalDateTime = when {
-            allDay -> d.local.toLocalDate().atStartOfDay()
-            zone != null && d.zone != null -> d.local.atZone(d.zone).withZoneSameInstant(zone).toLocalDateTime()
-            // A floating event compared with an absolute date: read the absolute date on the device's clock.
-            zone == null && d.zone != null -> d.local.atZone(d.zone).withZoneSameInstant(deviceZone).toLocalDateTime()
-            else -> d.local
-        }
+        fun inEventZone(d: IcsDate): LocalDateTime = localIn(d, allDay, zone, deviceZone)
 
         val dtEnd = c.prop("DTEND")?.let(::parseDate)
         val duration = c.prop("DURATION")?.value?.let(::parseDuration)
@@ -73,12 +67,22 @@ object EventParser {
                 Attendee(name = p.param("CN")?.takeIf { it.isNotBlank() } ?: email, email = email, status = p.param("PARTSTAT"))
             },
             organizer = c.prop("ORGANIZER")?.let { p -> p.param("CN")?.takeIf { it.isNotBlank() } ?: stripMailto(p.value) },
+            organizerEmail = c.prop("ORGANIZER")?.let { stripMailto(it.value) },
             url = c.prop("URL")?.value?.trim()?.takeIf { it.isNotEmpty() },
         )
 
         val recurrenceKey = c.prop("RECURRENCE-ID")?.let(::parseDate)?.let { draft.keyOf(inEventZone(it), deviceZone) }
         val alarms = c.children("VALARM").mapNotNull { alarmMinutes(it, draft, deviceZone) }.distinct().sorted()
         return draft.copy(recurrenceKey = recurrenceKey, alarms = alarms)
+    }
+
+    /** Wall-clock time of [d] in the event's own zone (all-day events have no time, floating ones follow the device). */
+    fun localIn(d: IcsDate, allDay: Boolean, zone: ZoneId?, deviceZone: ZoneId): LocalDateTime = when {
+        allDay -> d.local.toLocalDate().atStartOfDay()
+        zone != null && d.zone != null -> d.local.atZone(d.zone).withZoneSameInstant(zone).toLocalDateTime()
+        // A floating event compared with an absolute date: read the absolute date on the device's clock.
+        zone == null && d.zone != null -> d.local.atZone(d.zone).withZoneSameInstant(deviceZone).toLocalDateTime()
+        else -> d.local
     }
 
     private fun alarmMinutes(alarm: IcsComponent, event: VEvent, deviceZone: ZoneId): Int? {
@@ -138,7 +142,7 @@ object EventParser {
         }
     }
 
-    private fun stripMailto(value: String): String = value.trim().let {
+    fun stripMailto(value: String): String = value.trim().let {
         if (it.startsWith("mailto:", ignoreCase = true)) it.substring(7) else it
     }
 }

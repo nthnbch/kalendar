@@ -33,6 +33,7 @@ data class VEvent(
     val alarms: List<Int> = emptyList(),
     val attendees: List<Attendee> = emptyList(),
     val organizer: String? = null,
+    val organizerEmail: String? = null,
     val url: String? = null,
 ) {
     val isRecurring: Boolean get() = rrule != null || rdates.isNotEmpty()

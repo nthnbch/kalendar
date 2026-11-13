@@ -59,6 +59,7 @@ import ch.nthnbch.kalendar.R
 import ch.nthnbch.kalendar.data.Snapshot
 import ch.nthnbch.kalendar.ical.EventDraft
 import ch.nthnbch.kalendar.ical.EventResource
+import ch.nthnbch.kalendar.ical.Scope
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
@@ -80,6 +81,7 @@ private val REMINDERS = listOf(0, 5, 10, 15, 30, 60, 120, 1440, 2880, 10080)
 fun EventEditor(
     snapshot: Snapshot,
     request: EditorRequest,
+    myEmail: String?,
     onClose: () -> Unit,
     onSave: suspend (calendarUrl: String, draft: EventDraft, resource: EventResource?) -> String?,
 ) {
@@ -87,7 +89,18 @@ fun EventEditor(
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("editor", android.content.Context.MODE_PRIVATE) }
     val resource = remember { request.occurrence?.let { snapshot.resource(it.href) } }
-    val source = remember { resource?.events?.firstOrNull { it.recurrenceKey == null } ?: request.occurrence?.event }
+    val scopeNow = request.scope
+    val master = remember { resource?.events?.firstOrNull { it.recurrenceKey == null } ?: request.occurrence?.event }
+    val source = remember {
+        val o = request.occurrence
+        when {
+            o == null || scopeNow == Scope.ALL || master == null -> master
+            // An override carries its own fields; a plain occurrence borrows the series' and moves to its own date.
+            o.event.recurrenceKey != null -> o.event
+            else -> master.copy(start = o.originalStart, end = o.originalStart.plus(Duration.between(master.start, master.end)))
+        }
+    }
+    val isOrganizer = remember { source?.organizerEmail == null || source.organizerEmail.equals(myEmail, ignoreCase = true) }
     val writable = remember(snapshot) { snapshot.calendars.filter { !it.readOnly } }
     val zone = remember { source?.zone ?: ZoneId.systemDefault() }
 
@@ -103,7 +116,8 @@ fun EventEditor(
     var start by remember { mutableStateOf(source?.start ?: defaultStart) }
     // For all-day events the form shows the last day itself; the stored end is the day after.
     var end by remember { mutableStateOf(source?.let { if (it.allDay) it.end.minusDays(1) else it.end } ?: defaultStart.plusHours(1)) }
-    var rrule by remember { mutableStateOf(source?.rrule) }
+    var rrule by remember { mutableStateOf(if (scopeNow == Scope.THIS) null else source?.rrule ?: master?.rrule?.takeIf { scopeNow != Scope.ALL }) }
+    var guests by remember { mutableStateOf(source?.attendees?.joinToString(", ") { it.email }.orEmpty()) }
     var alarms by remember { mutableStateOf(source?.alarms ?: listOf(15)) }
     var calendarUrl by remember {
         mutableStateOf(
@@ -136,6 +150,7 @@ fun EventEditor(
                 else -> end
             },
             zone = zone, rrule = rrule, alarms = alarms,
+            guests = if (isOrganizer) guests.split(',', ';', '\n', ' ').map { it.trim() }.filter { "@" in it } else null,
         )
         scope.launch {
             prefs.edit().putString("calendar", calendarUrl).apply()
@@ -168,8 +183,12 @@ fun EventEditor(
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             )
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-            if (source?.isRecurring == true) {
-                Text(stringResource(R.string.editing_series), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (source?.isRecurring == true || scopeNow != Scope.ALL) {
+                Text(stringResource(when (scopeNow) {
+                    Scope.THIS -> R.string.editing_this
+                    Scope.FOLLOWING -> R.string.editing_following
+                    Scope.ALL -> R.string.editing_series
+                }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
             Line(stringResource(R.string.all_day), onClick = { allDay = !allDay }) { Switch(checked = allDay, onCheckedChange = { allDay = it }) }
@@ -185,16 +204,18 @@ fun EventEditor(
                 label = stringResource(R.string.field_calendar),
                 value = calendar?.name ?: stringResource(R.string.no_calendars),
                 dot = calendar?.let { Color(it.color) },
-                options = writable.map { it.url to it.name },
+                options = if (scopeNow == Scope.ALL) writable.map { it.url to it.name } else emptyList(),
                 onPick = { calendarUrl = it },
             )
-            val known = REPEATS.firstOrNull { it.first == rrule }
-            Choice(
-                label = stringResource(R.string.field_repeat),
-                value = stringResource(known?.second ?: R.string.repeat_custom),
-                options = REPEATS.map { (it.first ?: "") to stringResource(it.second) },
-                onPick = { rrule = it.ifEmpty { null } },
-            )
+            if (scopeNow != Scope.THIS) {
+                val known = REPEATS.firstOrNull { it.first == rrule }
+                Choice(
+                    label = stringResource(R.string.field_repeat),
+                    value = stringResource(known?.second ?: R.string.repeat_custom),
+                    options = REPEATS.map { (it.first ?: "") to stringResource(it.second) },
+                    onPick = { rrule = it.ifEmpty { null } },
+                )
+            }
             Choice(
                 label = stringResource(R.string.field_reminder),
                 value = if (alarms.isEmpty()) stringResource(R.string.reminder_none) else alarms.joinToString(", ") { reminderLabel(context, it) },
@@ -208,6 +229,14 @@ fun EventEditor(
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             )
+            if (isOrganizer && scopeNow != Scope.THIS) {
+                OutlinedTextField(
+                    value = guests, onValueChange = { guests = it }, label = { Text(stringResource(R.string.field_guests)) },
+                    supportingText = { Text(stringResource(R.string.guests_hint)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+                )
+            }
             OutlinedTextField(
                 value = notes, onValueChange = { notes = it }, label = { Text(stringResource(R.string.field_notes)) },
                 minLines = 3, modifier = Modifier.fillMaxWidth(),

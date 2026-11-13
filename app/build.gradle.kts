@@ -89,4 +89,5 @@ dependencies {
     implementation("org.dmfs:lib-recur:0.17.1")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

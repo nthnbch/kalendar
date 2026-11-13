@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = when (Repository.get(applicationContext).sync()) {
-        is SyncOutcome.Failed -> if (runAttemptCount < 3) Result.retry() else Result.failure()
+        is SyncOutcome.Failed, SyncOutcome.Offline -> if (runAttemptCount < 3) Result.retry() else Result.failure()
         else -> Result.success()
     }
 

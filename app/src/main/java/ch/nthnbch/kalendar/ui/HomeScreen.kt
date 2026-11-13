@@ -71,11 +71,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.nthnbch.kalendar.R
+import ch.nthnbch.kalendar.data.Network
 import ch.nthnbch.kalendar.data.Repository
 import ch.nthnbch.kalendar.data.Snapshot
 import ch.nthnbch.kalendar.data.SyncOutcome
 import ch.nthnbch.kalendar.dav.ConflictException
 import ch.nthnbch.kalendar.ical.Occurrence
+import ch.nthnbch.kalendar.ical.Scope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,7 +86,7 @@ import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 
 /** What the editor was opened for: a new event on [date], or a change to [occurrence]. */
-data class EditorRequest(val date: LocalDate, val occurrence: Occurrence? = null)
+data class EditorRequest(val date: LocalDate, val occurrence: Occurrence? = null, val scope: Scope = Scope.ALL)
 
 private const val PAGES = 2400
 private const val HOME_PAGE = PAGES / 2
@@ -98,6 +100,7 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
     val scope = rememberCoroutineScope()
     val snapshot by repository.state.collectAsStateWithLifecycle()
     val syncing by repository.syncing.collectAsStateWithLifecycle()
+    val account by repository.account.collectAsStateWithLifecycle()
     val authFailed by repository.authFailed.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
@@ -110,7 +113,11 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
 
     suspend fun report(outcome: SyncOutcome) {
-        if (outcome is SyncOutcome.Failed) snackbar.showSnackbar(context.getString(R.string.sync_failed, outcome.message))
+        when (outcome) {
+            is SyncOutcome.Failed -> snackbar.showSnackbar(context.getString(R.string.sync_failed, outcome.message))
+            SyncOutcome.Offline -> snackbar.showSnackbar(context.getString(R.string.offline))
+            else -> Unit
+        }
     }
 
     LaunchedEffect(Unit) { repository.ensureLoaded() }
@@ -160,16 +167,18 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
         EventEditor(
             snapshot = snapshot,
             request = request,
+            myEmail = account?.email,
             onClose = { editor = null },
             onSave = { calendarUrl, draft, resource ->
                 try {
-                    repository.save(calendarUrl, draft, resource)
+                    repository.save(calendarUrl, draft, resource, request.scope, request.occurrence)
                     editor = null
                     null
                 } catch (e: ConflictException) {
                     context.getString(R.string.conflict)
                 } catch (e: Exception) {
-                    context.getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
+                    if (Network.isConnectivityFailure(e)) context.getString(R.string.offline_not_saved)
+                    else context.getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
                 }
             },
         )
@@ -225,19 +234,38 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
             snapshot = snapshot,
             occurrence = occurrence,
             onDismiss = { detail = null },
-            onEdit = {
+            myEmail = account?.email,
+            onEdit = { editScope ->
                 detail = null
-                editor = EditorRequest(occurrence.firstDay, occurrence)
+                editor = EditorRequest(occurrence.firstDay, occurrence, editScope)
             },
-            onDelete = { onlyThisOne ->
-                detail = null
+            onRespond = { status ->
                 scope.launch {
                     try {
-                        repository.delete(occurrence, onlyThisOne)
+                        repository.respond(occurrence.href, status)
+                        snackbar.showSnackbar(context.getString(R.string.reply_sent))
                     } catch (e: ConflictException) {
                         snackbar.showSnackbar(context.getString(R.string.conflict))
                     } catch (e: Exception) {
-                        snackbar.showSnackbar(context.getString(R.string.delete_failed, e.message ?: e.javaClass.simpleName))
+                        snackbar.showSnackbar(
+                            if (Network.isConnectivityFailure(e)) context.getString(R.string.offline_not_saved)
+                            else context.getString(R.string.save_failed, e.message ?: e.javaClass.simpleName),
+                        )
+                    }
+                }
+            },
+            onDelete = { deleteScope ->
+                detail = null
+                scope.launch {
+                    try {
+                        repository.delete(occurrence, deleteScope)
+                    } catch (e: ConflictException) {
+                        snackbar.showSnackbar(context.getString(R.string.conflict))
+                    } catch (e: Exception) {
+                        snackbar.showSnackbar(
+                            if (Network.isConnectivityFailure(e)) context.getString(R.string.offline_not_saved)
+                            else context.getString(R.string.delete_failed, e.message ?: e.javaClass.simpleName),
+                        )
                     }
                 }
             },
