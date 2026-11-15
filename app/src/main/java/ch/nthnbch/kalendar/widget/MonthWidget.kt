@@ -90,6 +90,11 @@ private class MonthModel(val month: YearMonth, val shifted: Boolean, val start: 
 
 class MonthWidget : GlanceAppWidget() {
 
+    private companion object {
+        val cache = LinkedHashMap<YearMonth, MonthModel>()
+        var cacheSnapshot: Snapshot? = null
+    }
+
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -99,11 +104,27 @@ class MonthWidget : GlanceAppWidget() {
         val today = LocalDate.now()
         val current = YearMonth.from(today)
         val offset = if (prefs[BASE] == index(current)) prefs[OFFSET] ?: 0 else 0
-        val model = withContext(Dispatchers.Default) { model(snapshot, current.plusMonths(offset.toLong()), offset != 0) }
+        val model = cachedModel(snapshot, current.plusMonths(offset.toLong()), offset != 0)
         provideContent {
             // Redrawn from scratch by every update() (data change, month shift, new day): nothing to observe here.
             GlanceTheme { Month(model, today) }
         }
+    }
+
+    /** Browsing back and forth revisits the same months: keep the last few models instead of expanding every event again. */
+    private suspend fun cachedModel(snapshot: Snapshot, month: YearMonth, shifted: Boolean): MonthModel {
+        synchronized(cache) {
+            if (cacheSnapshot !== snapshot) { cache.clear(); cacheSnapshot = snapshot }
+            cache[month]?.let { return MonthModel(it.month, shifted, it.start, it.weeks, it.chips) }
+        }
+        val built = withContext(Dispatchers.Default) { model(snapshot, month, shifted) }
+        synchronized(cache) {
+            if (cacheSnapshot === snapshot) {
+                if (cache.size >= 6) cache.remove(cache.keys.first())
+                cache[month] = built
+            }
+        }
+        return built
     }
 
     private fun model(snapshot: Snapshot, month: YearMonth, shifted: Boolean): MonthModel {

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -124,6 +125,7 @@ fun EventEditor(
     var end by remember { mutableStateOf(source?.let { if (it.allDay) it.end.minusDays(1) else it.end } ?: defaultStart.plus(DEFAULT_DURATION)) }
     var rrule by remember { mutableStateOf(if (scopeNow == Scope.THIS) null else source?.rrule ?: master?.rrule?.takeIf { scopeNow != Scope.ALL }) }
     var guests by remember { mutableStateOf(source?.attendees?.joinToString(", ") { it.email }.orEmpty()) }
+    val knownGuests = remember { prefs.getString("guests", null)?.split('\n')?.filter { "@" in it }.orEmpty() }
     var alarms by remember { mutableStateOf(source?.alarms ?: listOf(DEFAULT_REMINDER)) }
     var calendarUrl by remember {
         mutableStateOf(
@@ -159,7 +161,9 @@ fun EventEditor(
             guests = if (isOrganizer) guests.split(',', ';', '\n', ' ').map { it.trim() }.filter { "@" in it } else null,
         )
         scope.launch {
-            prefs.edit().putString("calendar", calendarUrl).apply()
+            // Remember invited addresses (most recent first) so they can be suggested next time.
+            val remembered = (draft.guests.orEmpty() + knownGuests).distinctBy { it.lowercase() }.take(200)
+            prefs.edit().putString("calendar", calendarUrl).putString("guests", remembered.joinToString("\n")).apply()
             error = onSave(calendarUrl, draft, resource)
             busy = false
         }
@@ -242,6 +246,22 @@ fun EventEditor(
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
                 )
+                val typed = guests.split(',', ';', '\n', ' ').map { it.trim().lowercase() }
+                val prefix = typed.lastOrNull().orEmpty()
+                val suggestions = knownGuests.filter { k -> k.lowercase() !in typed && (prefix.isEmpty() || k.lowercase().contains(prefix)) }.take(8)
+                if (suggestions.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (email in suggestions) {
+                            androidx.compose.material3.SuggestionChip(
+                                onClick = {
+                                    val kept = guests.trimEnd().let { g -> if (prefix.isNotEmpty() && !g.endsWith(",")) g.dropLast(prefix.length).trimEnd(',', ' ') else g.trimEnd(',', ' ') }
+                                    guests = if (kept.isEmpty()) "$email, " else "$kept, $email, "
+                                },
+                                label = { Text(email) },
+                            )
+                        }
+                    }
+                }
             }
             OutlinedTextField(
                 value = notes, onValueChange = { notes = it }, label = { Text(stringResource(R.string.field_notes)) },
