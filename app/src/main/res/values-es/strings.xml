@@ -145,4 +145,15 @@
         <item quantity="many">%d semanas antes</item>
         <item quantity="other">%d semanas antes</item>
     </plurals>
+    <string name="settings_updates">Actualizaciones</string>
+    <string name="settings_update_auto">Buscar actualizaciones automáticamente</string>
+    <string name="settings_update_auto_hint">Una notificación avisa cuando se publica una nueva versión en GitHub.</string>
+    <string name="update_check">Buscar actualizaciones</string>
+    <string name="update_checking">Buscando…</string>
+    <string name="update_uptodate">Actualizado</string>
+    <string name="update_version_available">Versión %1$s disponible</string>
+    <string name="update_install">Descargar e instalar</string>
+    <string name="update_downloading">Descargando…</string>
+    <string name="update_error">No se puede acceder a GitHub</string>
+    <string name="update_notice">Abre Kalendar para descargarla e instalarla.</string>
 </resources>

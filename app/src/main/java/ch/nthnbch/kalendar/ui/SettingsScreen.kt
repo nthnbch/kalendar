@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import ch.nthnbch.kalendar.BuildConfig
 import ch.nthnbch.kalendar.R
 import ch.nthnbch.kalendar.data.Settings
+import ch.nthnbch.kalendar.data.Updater
+import kotlinx.coroutines.launch
 import ch.nthnbch.kalendar.data.Settings.Theme
 
 /** Native names: a language must stay recognisable whatever the app is currently set to. */
@@ -56,6 +59,7 @@ fun SettingsScreen(onClose: () -> Unit) {
     var lock by remember { mutableStateOf(Settings.appLock(context)) }
     var lockUnavailable by remember { mutableStateOf(false) }
     var replies by remember { mutableStateOf(Settings.notifyReplies(context)) }
+    var autoUpdate by remember { mutableStateOf(Settings.updateCheck(context)) }
 
     Scaffold(
         topBar = {
@@ -119,6 +123,14 @@ fun SettingsScreen(onClose: () -> Unit) {
             }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Section(R.string.settings_updates)
+            Toggle(stringResource(R.string.settings_update_auto), stringResource(R.string.settings_update_auto_hint), autoUpdate) {
+                autoUpdate = it
+                Settings.setUpdateCheck(context, it)
+            }
+            UpdateRow()
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Section(R.string.settings_about)
             Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)) {
                 Text(stringResource(R.string.settings_version), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
@@ -126,6 +138,64 @@ fun SettingsScreen(onClose: () -> Unit) {
             }
             LinkRow(stringResource(R.string.settings_latest), Settings.LATEST_RELEASE_URL)
             LinkRow(stringResource(R.string.settings_source), Settings.REPO_URL)
+        }
+    }
+}
+
+private sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data object UpToDate : UpdateState
+    data class Available(val release: Updater.Release) : UpdateState
+    data object Downloading : UpdateState
+    data object Failed : UpdateState
+}
+
+/** "Check for updates", then "Download and install" when GitHub has a newer release. */
+@Composable
+private fun UpdateRow() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    val busy = state is UpdateState.Checking || state is UpdateState.Downloading
+    val title = when (val s = state) {
+        is UpdateState.Available -> stringResource(R.string.update_install)
+        else -> stringResource(R.string.update_check)
+    }
+    val status = when (val s = state) {
+        UpdateState.Idle -> null
+        UpdateState.Checking -> stringResource(R.string.update_checking)
+        UpdateState.UpToDate -> stringResource(R.string.update_uptodate)
+        is UpdateState.Available -> stringResource(R.string.update_version_available, s.release.version)
+        UpdateState.Downloading -> stringResource(R.string.update_downloading)
+        UpdateState.Failed -> stringResource(R.string.update_error)
+    }
+    Column(
+        Modifier.fillMaxWidth().clickable(enabled = !busy) {
+            val current = state
+            scope.launch {
+                if (current is UpdateState.Available) {
+                    state = UpdateState.Downloading
+                    state = runCatching { Updater.install(context, Updater.download(context, current.release)) }
+                        .fold({ current }, { UpdateState.Failed })
+                } else {
+                    state = UpdateState.Checking
+                    val latest = Updater.latest()
+                    state = when {
+                        latest == null -> UpdateState.Failed
+                        Updater.isNewer(latest) -> UpdateState.Available(latest)
+                        else -> UpdateState.UpToDate
+                    }
+                }
+            }
+        }.padding(horizontal = 24.dp, vertical = 12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        if (status != null) {
+            Text(
+                status, style = MaterialTheme.typography.bodyMedium,
+                color = if (state is UpdateState.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

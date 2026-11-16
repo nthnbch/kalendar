@@ -52,4 +52,10 @@ object Settings {
 
     fun notifyReplies(context: Context): Boolean = prefs(context).getBoolean("notify_replies", true)
     fun setNotifyReplies(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean("notify_replies", enabled).apply()
+
+    fun updateCheck(context: Context): Boolean = prefs(context).getBoolean("update_check", true)
+    fun setUpdateCheck(context: Context, enabled: Boolean) = prefs(context).edit().putBoolean("update_check", enabled).apply()
+
+    fun lastUpdateNotified(context: Context): String? = prefs(context).getString("update_notified", null)
+    fun setLastUpdateNotified(context: Context, version: String) = prefs(context).edit().putString("update_notified", version).apply()
 }

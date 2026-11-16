@@ -141,4 +141,15 @@
     <string name="reply_notice_accepted">%1$s a accepté</string>
     <string name="reply_notice_declined">%1$s a refusé</string>
     <string name="reply_notice_tentative">%1$s a répondu peut-être</string>
+    <string name="settings_updates">Mises à jour</string>
+    <string name="settings_update_auto">Vérifier les mises à jour automatiquement</string>
+    <string name="settings_update_auto_hint">Une notification t\'avertit quand une nouvelle version est publiée sur GitHub.</string>
+    <string name="update_check">Rechercher une mise à jour</string>
+    <string name="update_checking">Recherche…</string>
+    <string name="update_uptodate">À jour</string>
+    <string name="update_version_available">Version %1$s disponible</string>
+    <string name="update_install">Télécharger et installer</string>
+    <string name="update_downloading">Téléchargement…</string>
+    <string name="update_error">GitHub est inaccessible</string>
+    <string name="update_notice">Ouvre Kalendar pour la télécharger et l\'installer.</string>
 </resources>

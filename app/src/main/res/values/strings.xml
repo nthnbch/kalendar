@@ -142,4 +142,15 @@
     <string name="reply_notice_accepted">%1$s accepted</string>
     <string name="reply_notice_declined">%1$s declined</string>
     <string name="reply_notice_tentative">%1$s replied maybe</string>
+    <string name="settings_updates">Updates</string>
+    <string name="settings_update_auto">Check for updates automatically</string>
+    <string name="settings_update_auto_hint">A notification tells you when a new version is published on GitHub.</string>
+    <string name="update_check">Check for updates</string>
+    <string name="update_checking">Checking…</string>
+    <string name="update_uptodate">Up to date</string>
+    <string name="update_version_available">Version %1$s available</string>
+    <string name="update_install">Download and install</string>
+    <string name="update_downloading">Downloading…</string>
+    <string name="update_error">Could not reach GitHub</string>
+    <string name="update_notice">Open Kalendar to download and install it.</string>
 </resources>
