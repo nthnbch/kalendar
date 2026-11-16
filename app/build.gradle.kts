@@ -24,8 +24,8 @@ android {
         applicationId = "ch.nthnbch.kalendar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.2.1"
     }
 
     // Release signing: reads keystore.properties at the project root (git-ignored, never committed).

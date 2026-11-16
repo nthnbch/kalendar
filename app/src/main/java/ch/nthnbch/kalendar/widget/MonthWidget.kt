@@ -8,11 +8,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.Preferences
-import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.state.PreferencesGlanceStateDefinition
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import androidx.datastore.preferences.core.intPreferencesKey
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.text.TextPaint
+import android.text.TextUtils
+import androidx.compose.ui.graphics.toArgb
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.layout.ContentScale
+import androidx.glance.unit.ColorProvider
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
@@ -78,7 +87,15 @@ class ShiftMonthAction : ActionCallback {
             prefs[BASE] = current
             prefs[OFFSET] = if (delta == 0) 0 else offset + delta
         }
-        MonthWidget().update(context, glanceId)
+        // Taps in quick succession only need one redraw, of the last month: a render costs a few hundred ms,
+        // and one per tap would queue up behind the user's finger.
+        val mine = taps.incrementAndGet()
+        delay(180)
+        if (taps.get() == mine) MonthWidget().update(context, glanceId)
+    }
+
+    private companion object {
+        val taps = java.util.concurrent.atomic.AtomicInteger()
     }
 }
 
@@ -99,25 +116,28 @@ class MonthWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val repository = Repository.get(context)
-        val snapshot = repository.ensureLoaded()
-        val prefs = getAppWidgetState<Preferences>(context, PreferencesGlanceStateDefinition, id)
-        val today = LocalDate.now()
-        val current = YearMonth.from(today)
-        val offset = if (prefs[BASE] == index(current)) prefs[OFFSET] ?: 0 else 0
-        val model = cachedModel(snapshot, current.plusMonths(offset.toLong()), offset != 0)
+        repository.ensureLoaded()
+        // The session stays alive between taps and update() only recomposes it: everything that can change
+        // (month offset, data, the clock) has to be read inside the composition, not computed here once.
         provideContent {
-            // Redrawn from scratch by every update() (data change, month shift, new day): nothing to observe here.
+            val snapshot by repository.state.collectAsState()
+            val tick by Widgets.tick.collectAsState()
+            val prefs = currentState<Preferences>()
+            val today = remember(tick, prefs) { LocalDate.now() }
+            val current = YearMonth.from(today)
+            val offset = if (prefs[BASE] == index(current)) prefs[OFFSET] ?: 0 else 0
+            val model = remember(snapshot, current, offset) { cachedModel(snapshot, current.plusMonths(offset.toLong()), offset != 0) }
             GlanceTheme { Month(model, today) }
         }
     }
 
     /** Browsing back and forth revisits the same months: keep the last few models instead of expanding every event again. */
-    private suspend fun cachedModel(snapshot: Snapshot, month: YearMonth, shifted: Boolean): MonthModel {
+    private fun cachedModel(snapshot: Snapshot, month: YearMonth, shifted: Boolean): MonthModel {
         synchronized(cache) {
             if (cacheSnapshot !== snapshot) { cache.clear(); cacheSnapshot = snapshot }
             cache[month]?.let { return MonthModel(it.month, shifted, it.start, it.weeks, it.chips) }
         }
-        val built = withContext(Dispatchers.Default) { model(snapshot, month, shifted) }
+        val built = model(snapshot, month, shifted)
         synchronized(cache) {
             if (cacheSnapshot === snapshot) {
                 if (cache.size >= 6) cache.remove(cache.keys.first())
@@ -155,7 +175,7 @@ class MonthWidget : GlanceAppWidget() {
         val month = model.month
         // Room left for event labels in a cell: height of the grid / weeks, minus the day number.
         val cellHeight = (LocalSize.current.height.value - 8 - 10 - 34 - 15) / model.weeks
-        val lines = ((cellHeight - 22) / 12).toInt().coerceIn(0, 4)
+        val lines = ((cellHeight - 22) / 12).toInt().coerceIn(0, 3)
 
         Column(Widgets.surface().fillMaxSize().padding(start = 6.dp, end = 6.dp, top = 8.dp, bottom = 8.dp)) {
             Row(GlanceModifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -176,86 +196,104 @@ class MonthWidget : GlanceAppWidget() {
                 IconButton(R.drawable.ic_chevron_right, R.string.next_month, false, actionRunCallback<ShiftMonthAction>(actionParametersOf(DELTA to 1)))
             }
 
-            Row(GlanceModifier.fillMaxWidth().padding(bottom = 2.dp)) {
-                for (weekday in Format.weekdays()) {
-                    Text(
-                        text = Format.weekdayNarrow(weekday),
-                        style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center),
-                        modifier = GlanceModifier.defaultWeight(),
-                    )
-                }
-            }
-
-            for (week in 0 until model.weeks) {
-                Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
-                    for (d in 0 until 7) {
-                        val day = model.start.plusDays((week * 7 + d).toLong())
-                        DayCell(day, today, YearMonth.from(day) == month, model.chips[day].orEmpty(), lines, GlanceModifier.defaultWeight())
+            // The whole grid is one picture (like Fossify Calendar does): a few hundred views made every
+            // month change slow. Invisible clickable cells on top keep each day tappable.
+            val size = LocalSize.current
+            val density = context.resources.displayMetrics.density
+            val gridW = size.width.value - 12
+            val gridH = size.height.value - 16 - 40
+            val onSurface = GlanceTheme.colors.onSurface.getColor(context).toArgb()
+            val colors = GridColors(
+                onSurface, GlanceTheme.colors.onSurfaceVariant.getColor(context).toArgb(), GlanceTheme.colors.outline.getColor(context).toArgb(),
+                GlanceTheme.colors.primary.getColor(context).toArgb(), GlanceTheme.colors.onPrimary.getColor(context).toArgb(),
+            )
+            // The system counts the picture several times against a ~15 MB budget: keep it under ~3 MB.
+            val scale = minOf(1f, Math.sqrt(3_000_000.0 / (gridW * density * gridH * density * 4.0)).toFloat())
+            val bitmap = remember(model, today, gridW, gridH, colors) { drawGrid(model, today, (gridW * density * scale).toInt(), (gridH * density * scale).toInt(), density * scale, colors) }
+            Box(GlanceModifier.fillMaxWidth().defaultWeight()) {
+                Image(ImageProvider(bitmap), contentDescription = null, modifier = GlanceModifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+                Column(GlanceModifier.fillMaxSize()) {
+                    Spacer(GlanceModifier.height(WEEKDAYS_DP.dp))
+                    for (week in 0 until model.weeks) {
+                        Row(GlanceModifier.fillMaxWidth().defaultWeight()) {
+                            for (d in 0 until 7) {
+                                val day = model.start.plusDays((week * 7 + d).toLong())
+                                Box(GlanceModifier.defaultWeight().fillMaxHeight().clickable(actionStartActivity(Links.day(context, day)))) {}
+                            }
+                        }
                     }
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun DayCell(day: LocalDate, today: LocalDate, inMonth: Boolean, chips: List<Chip>, lines: Int, modifier: GlanceModifier) {
-        val context = LocalContext.current
-        val isToday = day == today
-        val alpha = if (inMonth) 1f else 0.45f
-        Column(
-            modifier.fillMaxHeight().padding(horizontal = 1.dp).clickable(actionStartActivity(Links.day(context, day))),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(
-                GlanceModifier.size(22.dp)
-                    .then(if (isToday) GlanceModifier.background(GlanceTheme.colors.primary).cornerRadius(11.dp) else GlanceModifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = day.dayOfMonth.toString(),
-                    style = TextStyle(
-                        color = when {
-                            isToday -> GlanceTheme.colors.onPrimary
-                            inMonth -> GlanceTheme.colors.onSurface
-                            else -> GlanceTheme.colors.outline
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                    ),
-                )
-            }
-            if (lines == 0) {
-                // Too small for labels: colored dots are all that fits.
-                Row(GlanceModifier.height(6.dp).padding(top = 1.dp), verticalAlignment = Alignment.CenterVertically) {
-                    chips.map { it.color }.distinct().take(3).forEachIndexed { i, color ->
-                        if (i > 0) Spacer(GlanceModifier.width(2.dp))
-                        Box(GlanceModifier.size(5.dp).background(Widgets.tint(color, alpha)).cornerRadius(3.dp)) {}
-                    }
-                }
-            } else {
-                val overflow = chips.size > lines
-                val shown = if (overflow) chips.take(lines - 1) else chips
-                for (chip in shown) {
-                    Box(GlanceModifier.fillMaxWidth().padding(top = 1.dp)) {
-                        Text(
-                            text = chip.title,
-                            maxLines = 1,
-                            style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 9.sp, fontWeight = FontWeight.Medium),
-                            modifier = GlanceModifier.fillMaxWidth()
-                                .background(Widgets.tint(chip.color, if (inMonth) 0.30f else 0.12f))
-                                .cornerRadius(3.dp).padding(horizontal = 2.dp),
-                        )
-                    }
-                }
-                if (overflow) {
-                    Text(
-                        text = "+" + (chips.size - shown.size),
-                        maxLines = 1,
-                        style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 9.sp),
-                    )
                 }
             }
         }
     }
 }
+
+private const val WEEKDAYS_DP = 20
+
+private data class GridColors(val onSurface: Int, val onSurfaceVariant: Int, val outline: Int, val primary: Int, val onPrimary: Int)
+
+private fun drawGrid(model: MonthModel, today: LocalDate, w: Int, h: Int, density: Float, c: GridColors): Bitmap {
+    val bitmap = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    fun dp(v: Float) = v * density
+    val cellW = w / 7f
+    val top = dp(WEEKDAYS_DP.toFloat())
+    val cellH = (h - top) / model.weeks
+
+    text.color = c.onSurfaceVariant; text.textSize = dp(11f); text.typeface = Typeface.create(Typeface.DEFAULT, 500, false)
+    Format.weekdays().forEachIndexed { i, wd ->
+        canvas.drawText(Format.weekdayNarrow(wd), cellW * (i + 0.5f), dp(13f), text)
+    }
+
+    val lines = ((cellH / density - 22) / 12).toInt().coerceIn(0, 5)
+    for (week in 0 until model.weeks) {
+        for (d in 0 until 7) {
+            val day = model.start.plusDays((week * 7 + d).toLong())
+            val inMonth = YearMonth.from(day) == model.month
+            val isToday = day == today
+            val x = cellW * d
+            val y = top + cellH * week
+            val cx = x + cellW / 2
+            val numberY = y + dp(16f)
+            if (isToday) {
+                paint.color = c.primary
+                canvas.drawCircle(cx, y + dp(11f), dp(11f), paint)
+            }
+            text.textSize = dp(12f)
+            text.typeface = Typeface.create(Typeface.DEFAULT, if (isToday) 700 else 500, false)
+            text.color = when { isToday -> c.onPrimary; inMonth -> c.onSurface; else -> c.outline }
+            canvas.drawText(day.dayOfMonth.toString(), cx, numberY, text)
+
+            val chips = model.chips[day].orEmpty()
+            val pad = dp(1f)
+            var cy = y + dp(24f)
+            if (lines == 0) {
+                chips.map { it.color }.distinct().take(3).forEachIndexed { i, color ->
+                    paint.color = tinted(color, if (inMonth) 1f else 0.45f)
+                    canvas.drawCircle(cx + (i - 1) * dp(7f), cy + dp(3f), dp(2.5f), paint)
+                }
+                continue
+            }
+            val overflow = chips.size > lines
+            val shown = if (overflow) chips.take(lines - 1) else chips
+            val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = dp(9f); color = c.onSurface; typeface = Typeface.create(Typeface.DEFAULT, 500, false) }
+            for (chip in shown) {
+                val l = x + pad; val r = x + cellW - pad
+                paint.color = tinted(chip.color, if (inMonth) 0.30f else 0.12f)
+                canvas.drawRoundRect(l, cy, r, cy + dp(11f), dp(3f), dp(3f), paint)
+                val fitted = TextUtils.ellipsize(chip.title, TextPaint(label), r - l - dp(4f), TextUtils.TruncateAt.END)
+                canvas.drawText(fitted, 0, fitted.length, l + dp(2f), cy + dp(8.5f), label)
+                cy += dp(12f)
+            }
+            if (overflow) {
+                label.color = c.onSurfaceVariant; label.textAlign = Paint.Align.CENTER
+                canvas.drawText("+" + (chips.size - shown.size), cx, cy + dp(8.5f), label)
+            }
+        }
+    }
+    return bitmap
+}
+
+private fun tinted(color: Int, alpha: Float): Int = (color and 0xFFFFFF) or ((alpha * 255).toInt() shl 24)
