@@ -45,6 +45,11 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -112,12 +117,29 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var detail by remember { mutableStateOf<Occurrence?>(null) }
     var editor by remember { mutableStateOf<EditorRequest?>(null) }
+    var swipeEdit by remember { mutableStateOf<Occurrence?>(null) }
+    var swipeDelete by remember { mutableStateOf<Occurrence?>(null) }
 
     suspend fun report(outcome: SyncOutcome) {
         when (outcome) {
             is SyncOutcome.Failed -> snackbar.showSnackbar(context.getString(R.string.sync_failed, outcome.message))
             SyncOutcome.Offline -> snackbar.showSnackbar(context.getString(R.string.offline))
             else -> Unit
+        }
+    }
+
+    fun deleteOccurrence(occurrence: Occurrence, deleteScope: Scope) {
+        scope.launch {
+            try {
+                repository.delete(occurrence, deleteScope)
+            } catch (e: ConflictException) {
+                snackbar.showSnackbar(context.getString(R.string.conflict))
+            } catch (e: Exception) {
+                snackbar.showSnackbar(
+                    if (Network.isConnectivityFailure(e)) context.getString(R.string.offline_not_saved)
+                    else context.getString(R.string.delete_failed, e.message ?: e.javaClass.simpleName),
+                )
+            }
         }
     }
 
@@ -228,11 +250,30 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (agendaMode) {
-                AgendaView(snapshot, today, selected, onSelect = { selectedEpochDay = it.toEpochDay() }, onOpen = { detail = it })
+                AgendaView(snapshot, today, selected, onSelect = { selectedEpochDay = it.toEpochDay() }, onOpen = { detail = it }, onSwipeEdit = { swipeEdit = it }, onSwipeDelete = { swipeDelete = it })
             } else {
-                MonthView(snapshot, today, selected, onSelect = { selectedEpochDay = it.toEpochDay() }, onOpen = { detail = it })
+                MonthView(snapshot, today, selected, onSelect = { selectedEpochDay = it.toEpochDay() }, onOpen = { detail = it }, onSwipeEdit = { swipeEdit = it }, onSwipeDelete = { swipeDelete = it })
             }
         }
+    }
+
+    swipeEdit?.let { occurrence ->
+        if (isRecurring(snapshot, occurrence)) {
+            EditScopeDialog(onPick = { swipeEdit = null; editor = EditorRequest(occurrence.firstDay, occurrence, it) }, onCancel = { swipeEdit = null })
+        } else {
+            LaunchedEffect(occurrence) {
+                swipeEdit = null
+                editor = EditorRequest(occurrence.firstDay, occurrence, Scope.ALL)
+            }
+        }
+    }
+    swipeDelete?.let { occurrence ->
+        DeleteDialog(
+            title = occurrence.event.summary.ifBlank { stringResource(R.string.untitled) },
+            recurring = isRecurring(snapshot, occurrence),
+            onDelete = { swipeDelete = null; deleteOccurrence(occurrence, it) },
+            onCancel = { swipeDelete = null },
+        )
     }
 
     detail?.let { occurrence ->
@@ -260,21 +301,7 @@ fun HomeScreen(repository: Repository, link: Link?, onLinkHandled: () -> Unit) {
                     }
                 }
             },
-            onDelete = { deleteScope ->
-                detail = null
-                scope.launch {
-                    try {
-                        repository.delete(occurrence, deleteScope)
-                    } catch (e: ConflictException) {
-                        snackbar.showSnackbar(context.getString(R.string.conflict))
-                    } catch (e: Exception) {
-                        snackbar.showSnackbar(
-                            if (Network.isConnectivityFailure(e)) context.getString(R.string.offline_not_saved)
-                            else context.getString(R.string.delete_failed, e.message ?: e.javaClass.simpleName),
-                        )
-                    }
-                }
-            },
+            onDelete = { deleteScope -> detail = null; deleteOccurrence(occurrence, deleteScope) },
         )
     }
 
@@ -303,7 +330,7 @@ private fun rememberOccurrences(snapshot: Snapshot, from: LocalDate, to: LocalDa
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MonthView(snapshot: Snapshot, today: LocalDate, selected: LocalDate, onSelect: (LocalDate) -> Unit, onOpen: (Occurrence) -> Unit) {
+private fun MonthView(snapshot: Snapshot, today: LocalDate, selected: LocalDate, onSelect: (LocalDate) -> Unit, onOpen: (Occurrence) -> Unit, onSwipeEdit: (Occurrence) -> Unit, onSwipeDelete: (Occurrence) -> Unit) {
     val origin = remember { YearMonth.now() }
     fun monthAt(page: Int): YearMonth = origin.plusMonths((page - HOME_PAGE).toLong())
     fun pageOf(month: YearMonth): Int = HOME_PAGE + ChronoUnit.MONTHS.between(origin, month).toInt()
@@ -334,7 +361,7 @@ private fun MonthView(snapshot: Snapshot, today: LocalDate, selected: LocalDate,
             MonthGrid(snapshot, monthAt(page), today, selected, onSelect)
         }
         HorizontalDivider()
-        DayList(snapshot, selected, today, onOpen, Modifier.fillMaxWidth().weight(1f))
+        DayList(snapshot, selected, today, onOpen, onSwipeEdit, onSwipeDelete, Modifier.fillMaxWidth().weight(1f))
     }
 }
 
@@ -423,7 +450,7 @@ private fun DayCell(
 }
 
 @Composable
-private fun DayList(snapshot: Snapshot, day: LocalDate, today: LocalDate, onOpen: (Occurrence) -> Unit, modifier: Modifier) {
+private fun DayList(snapshot: Snapshot, day: LocalDate, today: LocalDate, onOpen: (Occurrence) -> Unit, onSwipeEdit: (Occurrence) -> Unit, onSwipeDelete: (Occurrence) -> Unit, modifier: Modifier) {
     val context = LocalContext.current
     val occurrences = rememberOccurrences(snapshot, day, day.plusDays(1))
     LazyColumn(modifier, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -436,16 +463,69 @@ private fun DayList(snapshot: Snapshot, day: LocalDate, today: LocalDate, onOpen
         if (occurrences != null && occurrences.isEmpty()) {
             item { Text(stringResource(R.string.nothing_planned), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium) }
         }
-        items(occurrences.orEmpty(), key = { it.href + it.startInstant.epochSecond }) { o -> EventRow(snapshot, o, day, onOpen) }
+        items(occurrences.orEmpty(), key = { it.href + it.startInstant.epochSecond }) { o -> EventRow(snapshot, o, day, onOpen, onSwipeEdit, onSwipeDelete) }
+    }
+}
+
+/**
+ * One event. Swiping right opens its editor, swiping left deletes it; both only ask (the row springs back
+ * and the usual scope / confirmation dialog follows), so a stray swipe never changes anything by itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EventRow(
+    snapshot: Snapshot, o: Occurrence, day: LocalDate, onOpen: (Occurrence) -> Unit,
+    onSwipeEdit: (Occurrence) -> Unit, onSwipeDelete: (Occurrence) -> Unit, modifier: Modifier = Modifier,
+) {
+    val writable = snapshot.calendar(o.calendarUrl)?.readOnly == false
+    if (!writable) {
+        EventCard(snapshot, o, day, onOpen, modifier)
+        return
+    }
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> onSwipeEdit(o)
+                SwipeToDismissBoxValue.EndToStart -> onSwipeDelete(o)
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            false
+        },
+        positionalThreshold = { it * 0.35f },
+    )
+    SwipeToDismissBox(
+        state = state,
+        modifier = modifier,
+        backgroundContent = {
+            val edit = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            val delete = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
+            if (edit || delete) {
+                Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp))
+                        .background(if (edit) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                        .padding(horizontal = 20.dp),
+                    contentAlignment = if (edit) Alignment.CenterStart else Alignment.CenterEnd,
+                ) {
+                    Icon(
+                        if (edit) Icons.Filled.Edit else Icons.Filled.Delete,
+                        stringResource(if (edit) R.string.edit else R.string.delete),
+                        tint = if (edit) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onError,
+                    )
+                }
+            }
+        },
+    ) {
+        EventCard(snapshot, o, day, onOpen, Modifier)
     }
 }
 
 @Composable
-fun EventRow(snapshot: Snapshot, o: Occurrence, day: LocalDate, onOpen: (Occurrence) -> Unit, modifier: Modifier = Modifier) {
+private fun EventCard(snapshot: Snapshot, o: Occurrence, day: LocalDate, onOpen: (Occurrence) -> Unit, modifier: Modifier) {
     val context = LocalContext.current
     val color = snapshot.colorOf(o)
     Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(color.copy(alpha = 0.14f)).clickable { onOpen(o) }
+        modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface)
+            .background(color.copy(alpha = 0.14f)).clickable { onOpen(o) }
             .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -470,7 +550,7 @@ private data class AgendaDay(val day: LocalDate, val occurrences: List<Occurrenc
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AgendaView(snapshot: Snapshot, today: LocalDate, selected: LocalDate, onSelect: (LocalDate) -> Unit, onOpen: (Occurrence) -> Unit) {
+private fun AgendaView(snapshot: Snapshot, today: LocalDate, selected: LocalDate, onSelect: (LocalDate) -> Unit, onOpen: (Occurrence) -> Unit, onSwipeEdit: (Occurrence) -> Unit, onSwipeDelete: (Occurrence) -> Unit) {
     val context = LocalContext.current
     // The window follows the selection so that any day reached from the month view or a widget is in it.
     val anchor = remember(selected.withDayOfMonth(1)) { selected }
@@ -531,7 +611,7 @@ private fun AgendaView(snapshot: Snapshot, today: LocalDate, selected: LocalDate
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
                             )
                         }
-                        for (o in entry.occurrences) EventRow(snapshot, o, entry.day, onOpen)
+                        for (o in entry.occurrences) EventRow(snapshot, o, entry.day, onOpen, onSwipeEdit, onSwipeDelete)
                     }
                 }
             }

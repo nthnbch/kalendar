@@ -138,44 +138,54 @@ fun EventDetailSheet(
     }
 
     if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text(stringResource(R.string.delete_title)) },
-            text = { Text(event.summary.ifBlank { stringResource(R.string.untitled) }) },
-            confirmButton = {
-                Column(horizontalAlignment = Alignment.End) {
-                    if (recurring) {
-                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
-                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
-                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.ALL) }) {
-                            Text(stringResource(R.string.delete_series), color = MaterialTheme.colorScheme.error)
-                        }
-                    } else {
-                        TextButton(onClick = { confirmDelete = false; onDelete(Scope.ALL) }) {
-                            Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
+        DeleteDialog(
+            title = event.summary.ifBlank { stringResource(R.string.untitled) }, recurring = recurring,
+            onDelete = { confirmDelete = false; onDelete(it) }, onCancel = { confirmDelete = false },
         )
     }
 
-    if (chooseEdit) {
-        AlertDialog(
-            onDismissRequest = { chooseEdit = false },
-            title = { Text(stringResource(R.string.edit_which)) },
-            text = {
-                Column {
-                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
-                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
-                    TextButton(onClick = { chooseEdit = false; onEdit(Scope.ALL) }) { Text(stringResource(R.string.delete_series)) }
+    if (chooseEdit) EditScopeDialog(onPick = { chooseEdit = false; onEdit(it) }, onCancel = { chooseEdit = false })
+}
+
+fun isRecurring(snapshot: Snapshot, occurrence: Occurrence): Boolean =
+    occurrence.event.recurrenceKey != null || snapshot.resource(occurrence.href)?.events?.any { it.isRecurring } == true
+
+@Composable
+fun DeleteDialog(title: String, recurring: Boolean, onDelete: (Scope) -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(stringResource(R.string.delete_title)) },
+        text = { Text(title) },
+        confirmButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                if (recurring) {
+                    TextButton(onClick = { onDelete(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
+                    TextButton(onClick = { onDelete(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
+                    TextButton(onClick = { onDelete(Scope.ALL) }) { Text(stringResource(R.string.delete_series), color = MaterialTheme.colorScheme.error) }
+                } else {
+                    TextButton(onClick = { onDelete(Scope.ALL) }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
                 }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { chooseEdit = false }) { Text(stringResource(R.string.cancel)) } },
-        )
-    }
+            }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+fun EditScopeDialog(onPick: (Scope) -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(stringResource(R.string.edit_which)) },
+        text = {
+            Column {
+                TextButton(onClick = { onPick(Scope.THIS) }) { Text(stringResource(R.string.delete_this_one)) }
+                TextButton(onClick = { onPick(Scope.FOLLOWING) }) { Text(stringResource(R.string.scope_following)) }
+                TextButton(onClick = { onPick(Scope.ALL) }) { Text(stringResource(R.string.delete_series)) }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable
