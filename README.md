@@ -1,4 +1,8 @@
+<p align="center"><img src="docs/icon.png" width="128" alt="Icône de Kalendar"></p>
+
 # Kalendar
+
+🇫🇷 **Français** · 🇬🇧 [English](README.en.md) · 🇩🇪 [Deutsch](README.de.md)
 
 Une application de calendrier Android **non officielle** pour un compte [Infomaniak](https://www.infomaniak.com), avec deux widgets (agenda et mois). Elle lit et écrit tes calendriers directement par CalDAV : pas besoin de l'assistant de synchronisation ni des applications Infomaniak.
 
